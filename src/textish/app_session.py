@@ -2,24 +2,11 @@ import asyncio
 import json
 import logging
 import os
-import sys
 from pathlib import Path
+
 from .protocol import encode_packet, read_packet
-from textual.app import App
 
 log = logging.getLogger("textish")
-
-
-def _command_for_app(app_class: "type[App]") -> str:
-    """Build a -c command that imports and runs the given App class."""
-    module = app_class.__module__
-    name = app_class.__qualname__
-    if module == "__main__":
-        raise ValueError(
-            f"Cannot serve {name!r}: class is defined in __main__. "
-            "Move it to a importable module (e.g. app.py) and import it from there."
-        )
-    return f'{sys.executable} -c "from {module} import {name}; {name}().run()"'
 
 
 class AppSession:
@@ -28,13 +15,13 @@ class AppSession:
 
     def __init__(
         self,
-        app_class: "type[App]",
+        app_command: str,
         channel,
         cols: int = 80,
         rows: int = 24,
         working_dir: str | Path | None = None,
     ) -> None:
-        self._app_command = _command_for_app(app_class)
+        self._app_command = app_command
         self._channel = channel
         self._cols = cols
         self._rows = rows
@@ -53,12 +40,14 @@ class AppSession:
             self._app_command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             env=env,
             cwd=self._working_dir,
         )
 
         try:
-            # The textual WebDriver prints "__GANGLION__\n" when it's ready to receive packets, so wait for that before we start forwarding data. If we don't do this, we might send packets before the WebDriver is ready and they would be lost. Inspired by `textual-web`
+            # The Textual WebDriver prints "__GANGLION__\n" before starting the
+            # packet protocol. Wait for it before forwarding data.
             ready = False
             for _ in range(10):
                 line = await self._process.stdout.readline()
@@ -69,7 +58,12 @@ class AppSession:
                     break
 
             if not ready:
-                log.error("WebDriver handshake failed — never received __GANGLION__")
+                stderr = await self._process.stderr.read() if self._process.stderr else b""
+                log.error(
+                    "WebDriver handshake failed — never received __GANGLION__\n"
+                    "Subprocess stderr:\n%s",
+                    stderr.decode(errors="replace"),
+                )
                 return
 
             while True:
@@ -78,7 +72,6 @@ class AppSession:
                     break  # subprocess stdout closed (process exited)
                 type_byte, payload = result
                 if type_byte == b"D":
-                    # Raw terminal output — write directly to the user's terminal
                     self._channel.write(payload)
                 elif type_byte == b"M":
                     meta = json.loads(payload)
@@ -86,30 +79,47 @@ class AppSession:
                         break
         finally:
             self._channel.close()
+            if self._process is not None and self._process.returncode is None:
+                self._process.terminate()
 
     async def send_input(self, data: bytes) -> None:
-        """Forward a keypress (or any stdin bytes) from the SSH client to the app."""
+        """Forward a keypress from the SSH client to the app."""
         if self._process is not None and self._process.stdin is not None:
-            self._process.stdin.write(encode_packet(b"D", data))
-            await self._process.stdin.drain()
+            try:
+                self._process.stdin.write(encode_packet(b"D", data))
+                await self._process.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     async def resize(self, cols: int, rows: int) -> None:
         """Notify the app that the terminal was resized."""
         self._cols = cols
         self._rows = rows
         if self._process is not None and self._process.stdin is not None:
-            meta = json.dumps(
-                {"type": "resize", "width": cols, "height": rows}
-            ).encode()
-            self._process.stdin.write(encode_packet(b"M", meta))
-            await self._process.stdin.drain()
+            try:
+                meta = json.dumps({"type": "resize", "width": cols, "height": rows}).encode()
+                self._process.stdin.write(encode_packet(b"M", meta))
+                await self._process.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     async def close(self) -> None:
-        """Tell the app to quit (called when the SSH client disconnects)."""
-        if self._process is not None and self._process.stdin is not None:
+        """Tell the app to quit and ensure the subprocess is reaped."""
+        if self._process is None:
+            return
+
+        if self._process.stdin is not None:
             try:
                 meta = json.dumps({"type": "quit"}).encode()
                 self._process.stdin.write(encode_packet(b"M", meta))
                 await self._process.stdin.drain()
+                self._process.stdin.close()
             except Exception:
-                pass  # channel may already be closing
+                pass
+
+        try:
+            await asyncio.wait_for(self._process.wait(), timeout=3.0)
+        except asyncio.TimeoutError:
+            log.warning("Subprocess did not exit after quit signal, killing.")
+            self._process.kill()
+            await self._process.wait()

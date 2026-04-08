@@ -1,4 +1,5 @@
+import sys
 from textish import serve
-from app import WordleApp
 
-serve(WordleApp, port=2222)
+# sys.executable ensures the subprocess uses the same venv Python as the server
+serve(f"{sys.executable} examples/app.py", port=2222)

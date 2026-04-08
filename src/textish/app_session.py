@@ -84,6 +84,7 @@ class AppSession:
             self._channel.close()
             if self._process is not None and self._process.returncode is None:
                 self._process.terminate()
+                await self._process.wait()
 
     async def send_input(self, data: bytes) -> None:
         """Forward a keypress from the SSH client to the app."""

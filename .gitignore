@@ -1,0 +1,9 @@
+# pixi environments
+.venv/
+venv/
+.env
+.vscode/
+**/settings.json
+**/__pycache__/
+**/*.pyc
+.ruff_cache/

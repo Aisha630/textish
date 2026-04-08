@@ -2,11 +2,24 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from pathlib import Path
-
 from .protocol import encode_packet, read_packet
+from textual.app import App
 
 log = logging.getLogger("textish")
+
+
+def _command_for_app(app_class: "type[App]") -> str:
+    """Build a -c command that imports and runs the given App class."""
+    module = app_class.__module__
+    name = app_class.__qualname__
+    if module == "__main__":
+        raise ValueError(
+            f"Cannot serve {name!r}: class is defined in __main__. "
+            "Move it to a importable module (e.g. app.py) and import it from there."
+        )
+    return f'{sys.executable} -c "from {module} import {name}; {name}().run()"'
 
 
 class AppSession:
@@ -15,13 +28,13 @@ class AppSession:
 
     def __init__(
         self,
-        app_command: str,
+        app_class: "type[App]",
         channel,
         cols: int = 80,
         rows: int = 24,
         working_dir: str | Path | None = None,
     ) -> None:
-        self._app_command = app_command
+        self._app_command = _command_for_app(app_class)
         self._channel = channel
         self._cols = cols
         self._rows = rows

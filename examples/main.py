@@ -1,5 +1,4 @@
-import sys
 from textish import serve
+from app import WordleApp
 
-python = sys.executable
-serve(f"{python} examples/app.py", port=2222)
+serve(WordleApp, port=2222)

@@ -1,7 +1,7 @@
 [project]
 name = "textish"
 version = "0.1.0"
-description = ""
+description = "Serve Textual apps over SSH"
 authors = [
     {name = "Aisha630",email = "ayeshashafique123@gmail.com"}
 ]

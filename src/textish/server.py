@@ -15,8 +15,8 @@ log = logging.getLogger("textish")
 class TextishSSHServerSession(asyncssh.SSHServerSession):
     """Handles one PTY shell session for a connected client."""
 
-    def __init__(self, app_class: str) -> None:
-        self._app_class = app_class
+    def __init__(self, app_command: str) -> None:
+        self._app_command = app_command
         self._channel: asyncssh.SSHServerChannel | None = None
         self._app_session: AppSession | None = None
         self._cols: int = 80
@@ -46,7 +46,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
             self._channel.close()
             return
         self._app_session = AppSession(
-            app_class=self._app_class,
+            app_command=self._app_command,
             channel=self._channel,
             cols=self._cols,
             rows=self._rows,
@@ -75,8 +75,8 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
 class TextishSSHServer(asyncssh.SSHServer):
     """Handles the SSH connection itself — auth and session creation."""
 
-    def __init__(self, app_class: str) -> None:
-        self._app_class = app_class
+    def __init__(self, app_command: str) -> None:
+        self._app_command = app_command
         self._conn: asyncssh.SSHServerConnection | None = None
 
     def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
@@ -88,5 +88,5 @@ class TextishSSHServer(asyncssh.SSHServer):
 
     def session_requested(self):
         channel = self._conn.create_server_channel(encoding=None)
-        session = TextishSSHServerSession(self._app_class)
+        session = TextishSSHServerSession(self._app_command)
         return channel, session

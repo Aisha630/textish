@@ -78,7 +78,9 @@ class AppSession:
                 elif type_byte == b"M":
                     meta = json.loads(payload)
                     if meta.get("type") == "exit":
-                        pass  # keep reading until stdout closes so Textual can send cleanup sequences
+                        # wait for 3 seconds to allow subprocess to exit gracefully, then kill if it's still running
+                        await asyncio.wait_for(self._process.wait(), timeout=3.0)
+
         finally:
             # Terminate the subprocess forcibly if it's still running, and close the SSH channel
             self._channel.close()

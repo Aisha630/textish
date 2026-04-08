@@ -78,6 +78,7 @@ class AppSession:
                     if meta.get("type") == "exit":
                         break
         finally:
+            # Terminate the subprocess forecibly if it's still running, and close the SSH channel
             self._channel.close()
             if self._process is not None and self._process.returncode is None:
                 self._process.terminate()
@@ -104,7 +105,7 @@ class AppSession:
                 pass
 
     async def close(self) -> None:
-        """Tell the app to quit and ensure the subprocess is reaped."""
+        """Tell the app to quit and ensure the subprocess is killed."""
         if self._process is None:
             return
 

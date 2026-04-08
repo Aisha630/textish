@@ -51,26 +51,33 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
             cols=self._cols,
             rows=self._rows,
         )
-        asyncio.get_event_loop().create_task(self._app_session.run())
+        asyncio.get_running_loop().create_task(self._app_session.run())
 
     def data_received(self, data: bytes, datatype) -> None:
         if self._app_session is not None:
-            asyncio.get_event_loop().create_task(self._app_session.send_input(data))
+            asyncio.get_running_loop().create_task(self._app_session.send_input(data))
 
     def terminal_size_changed(
         self, width: int, height: int, pixwidth: int, pixheight: int
     ) -> None:
         self._cols, self._rows = width, height
         if self._app_session is not None:
-            asyncio.get_event_loop().create_task(
+            asyncio.get_running_loop().create_task(
                 self._app_session.resize(width, height)
             )
 
     def eof_received(self) -> bool:
         if self._app_session is not None:
-            asyncio.get_event_loop().create_task(self._app_session.close())
+            asyncio.get_running_loop().create_task(self._app_session.close())
         return False
 
+    def connection_lost(self, _exc: Exception | None) -> None:
+        if _exc:
+            log.warning("Connection lost with error: %s", _exc)
+        else:
+            log.info("Connection closed")
+        if self._app_session is not None:
+            asyncio.get_running_loop().create_task(self._app_session.close())
 
 class TextishSSHServer(asyncssh.SSHServer):
     """Handles the SSH connection itself — auth and session creation."""

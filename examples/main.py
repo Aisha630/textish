@@ -1,3 +1,5 @@
+import sys
 from textish import serve
 
-serve("poetry run python src/app.py", port=2222)
+python = sys.executable
+serve(f"{python} examples/app.py", port=2222)

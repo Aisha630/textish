@@ -5,15 +5,28 @@ from textual.containers import Vertical, Horizontal, Center
 from textual.reactive import reactive
 
 WORDS = [
-    "crane", "slate", "audio", "chess", "flame",
-    "brave", "grind", "piano", "shard", "light",
-    "ghost", "plumb", "frost", "quirk", "oxide",
+    "crane",
+    "slate",
+    "audio",
+    "chess",
+    "flame",
+    "brave",
+    "grind",
+    "piano",
+    "shard",
+    "light",
+    "ghost",
+    "plumb",
+    "frost",
+    "quirk",
+    "oxide",
 ]
 
 MAX_GUESSES = 6
 WORD_LENGTH = 5
 MIN_COLS = 44
 MIN_ROWS = 28
+
 
 def score_guess(guess: str, target: str) -> list[str]:
     result = ["absent"] * WORD_LENGTH
@@ -85,7 +98,9 @@ class WordleApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with Center(id="too-small"):
-            yield Label("Terminal too small.\nPlease resize to at least\n44 cols × 28 rows.")
+            yield Label(
+                "Terminal too small.\nPlease resize to at least\n44 cols × 28 rows."
+            )
         with Vertical(id="game"):
             for row in range(MAX_GUESSES):
                 with Horizontal(classes="board-row"):
@@ -137,7 +152,9 @@ class WordleApp(App):
             self._game_over = True
         else:
             remaining = MAX_GUESSES - len(self.guesses)
-            self._set_message(f"{remaining} guess{'es' if remaining != 1 else ''} left.")
+            self._set_message(
+                f"{remaining} guess{'es' if remaining != 1 else ''} left."
+            )
 
     def _set_message(self, text: str) -> None:
         self.query_one("#message", Label).update(text)

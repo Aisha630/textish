@@ -58,7 +58,9 @@ class AppSession:
                     break
 
             if not ready:
-                stderr = await self._process.stderr.read() if self._process.stderr else b""
+                stderr = (
+                    await self._process.stderr.read() if self._process.stderr else b""
+                )
                 log.error(
                     "WebDriver handshake failed — never received __GANGLION__\n"
                     "Subprocess stderr:\n%s",
@@ -76,9 +78,9 @@ class AppSession:
                 elif type_byte == b"M":
                     meta = json.loads(payload)
                     if meta.get("type") == "exit":
-                        break
+                        pass  # keep reading until stdout closes so Textual can send cleanup sequences
         finally:
-            # Terminate the subprocess forecibly if it's still running, and close the SSH channel
+            # Terminate the subprocess forcibly if it's still running, and close the SSH channel
             self._channel.close()
             if self._process is not None and self._process.returncode is None:
                 self._process.terminate()
@@ -98,7 +100,9 @@ class AppSession:
         self._rows = rows
         if self._process is not None and self._process.stdin is not None:
             try:
-                meta = json.dumps({"type": "resize", "width": cols, "height": rows}).encode()
+                meta = json.dumps(
+                    {"type": "resize", "width": cols, "height": rows}
+                ).encode()
                 self._process.stdin.write(encode_packet(b"M", meta))
                 await self._process.stdin.drain()
             except (BrokenPipeError, ConnectionResetError):

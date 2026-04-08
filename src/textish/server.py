@@ -67,6 +67,11 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
             )
 
     def eof_received(self) -> bool:
+        if self._channel is not None:
+            try:
+                self._channel.write(b"\x1b[?1049l")
+            except Exception:
+                pass
         if self._app_session is not None:
             asyncio.get_running_loop().create_task(self._app_session.close())
         return False
@@ -78,6 +83,10 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
             log.info("Connection closed")
         if self._app_session is not None:
             asyncio.get_running_loop().create_task(self._app_session.close())
+
+        # move cursor to bottom of screen before closing
+        self._channel.write(b"\x1b[?1049l")  # exit alternate screen mode
+
 
 class TextishSSHServer(asyncssh.SSHServer):
     """Handles the SSH connection itself — auth and session creation."""

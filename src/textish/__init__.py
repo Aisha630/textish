@@ -14,6 +14,7 @@ Usage::
 
 import asyncio
 import asyncssh
+from pathlib import Path
 
 from .server import TextishSSHServer
 
@@ -22,7 +23,7 @@ async def serve_async(
     app_command: str,
     host: str = "0.0.0.0",
     port: int = 2222,
-    host_keys: tuple[str, ...] | list[str] = ("~/.ssh/ssh_host_key",),
+    host_keys: tuple[str, ...] | list[str] = (Path.expanduser("~/.ssh/ssh_host_key"),),
 ) -> None:
     """Async version of serve(). Use this if you're already inside an event loop."""
     server = await asyncssh.create_server(
@@ -39,7 +40,7 @@ def serve(
     app_command: str,
     host: str = "0.0.0.0",
     port: int = 2222,
-    host_keys: tuple[str, ...] | list[str] = ("~/.ssh/ssh_host_key",),
+    host_keys: tuple[str, ...] | list[str] = (Path.expanduser("~/.ssh/ssh_host_key"),),
 ) -> None:
     """Start the SSH server and serve a Textual app to connecting clients.
 

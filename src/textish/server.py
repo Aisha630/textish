@@ -84,9 +84,6 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
         if self._app_session is not None:
             asyncio.get_running_loop().create_task(self._app_session.close())
 
-        # move cursor to bottom of screen before closing
-        self._channel.write(b"\x1b[?1049l")  # exit alternate screen mode
-
 
 class TextishSSHServer(asyncssh.SSHServer):
     """Handles the SSH connection itself — auth and session creation."""

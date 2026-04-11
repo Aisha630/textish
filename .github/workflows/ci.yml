@@ -32,8 +32,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "poetry"
       - name: Install dependencies
-        run: poetry install --no-interaction --extras syntax
-        if: ${{ matrix.python-version != '3.9' }}
+        run: poetry install --no-interaction
      
       - name: Test (Python 3.12)
         run: |

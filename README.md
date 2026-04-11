@@ -4,6 +4,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Built with asyncssh](https://img.shields.io/badge/built%20with-asyncssh-4a90d9)](https://asyncssh.readthedocs.io/)
 [![Powered by Textual](https://img.shields.io/badge/powered%20by-Textual-41337a)](https://github.com/Textualize/textual)
+[![Tests](https://img.shields.io/github/actions/workflow/status/Aisha630/textish/ci.yml?label=tests)](https://github.com/Aisha630/textish/actions/workflows/ci.yml)
 
 Serve [Textual](https://github.com/Textualize/textual) TUI apps over SSH. Point it at any command that runs a Textual app, give it a port, and anyone with an SSH client can connect and use the app in their terminal — no installation required on their end.
 

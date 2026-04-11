@@ -10,6 +10,7 @@ Serve [Textual](https://github.com/Textualize/textual) TUI apps over SSH. Point 
 ```python
 from textish import serve
 
+# Note: requires a host key at ~/.ssh/ssh_host_key by default
 serve("python my_app.py", port=2222)
 ```
 

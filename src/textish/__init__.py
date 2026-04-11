@@ -23,9 +23,12 @@ async def serve_async(
     app_command: str,
     host: str = "0.0.0.0",
     port: int = 2222,
-    host_keys: tuple[str, ...] | list[str] = (Path.expanduser("~/.ssh/ssh_host_key"),),
+    host_keys: tuple[str, ...] | list[str] | None = None,
 ) -> None:
     """Async version of serve(). Use this if you're already inside an event loop."""
+    if host_keys is None:
+        host_keys = (str(Path("~/.ssh/ssh_host_key").expanduser()),)
+
     server = await asyncssh.create_server(
         lambda: TextishSSHServer(app_command),
         host,
@@ -40,7 +43,7 @@ def serve(
     app_command: str,
     host: str = "0.0.0.0",
     port: int = 2222,
-    host_keys: tuple[str, ...] | list[str] = (Path.expanduser("~/.ssh/ssh_host_key"),),
+    host_keys: tuple[str, ...] | list[str] | None = None,
 ) -> None:
     """Start the SSH server and serve a Textual app to connecting clients.
 

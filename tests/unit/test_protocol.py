@@ -17,7 +17,8 @@ def test_encode_packet():
 
     with pytest.raises(TypeError):
         protocol.encode_packet(type_byte, "Hello, World!")
-        
+
+
 @pytest.mark.asyncio
 async def test_read_packet():
     reader = asyncio.StreamReader()
@@ -52,7 +53,7 @@ async def test_read_packet_eof_returns_none():
 @pytest.mark.asyncio
 async def test_read_packet_truncated_returns_none():
     reader = asyncio.StreamReader()
-    reader.feed_data(b"D\x00\x00\x00\x0a")  
+    reader.feed_data(b"D\x00\x00\x00\x0a")
     reader.feed_eof()
 
     result = await protocol.read_packet(reader)

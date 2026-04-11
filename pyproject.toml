@@ -2,7 +2,7 @@
 name = "textish"
 version = "0.1.0"
 description = "Serve Textual apps over SSH"
-license = {text = "MIT"}
+license = {file = "LICENSE"}
 authors = [
     {name = "Aisha630",email = "ayeshashafique123@gmail.com"}
 ]

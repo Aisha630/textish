@@ -46,14 +46,14 @@ async def test_send_input_handles_connection_reset(mock_channel):
 
 @pytest.mark.asyncio
 async def test_resize_sends_correct_meta_packet(mock_session):
-    session = mock_session 
+    session = mock_session
 
     await session.resize(120, 40)
 
     expected = encode_packet(
         b"M", json.dumps({"type": "resize", "width": 120, "height": 40}).encode()
     )
-    
+
     session._process.stdin.write.assert_called_once_with(expected)
     assert session._cols == 120
     assert session._rows == 40
@@ -75,7 +75,9 @@ async def test_close_sends_quit_and_waits(mock_session):
 async def test_close_kills_process_on_timeout(mock_session):
     session = mock_session
 
-    with patch("textish.app_session.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+    with patch(
+        "textish.app_session.asyncio.wait_for", side_effect=asyncio.TimeoutError
+    ):
         await session.close()
 
     session._process.kill.assert_called_once()
@@ -107,7 +109,9 @@ async def test_run_forwards_display_packet_to_channel(mock_channel, mock_process
 async def test_run_handles_exit_meta_packet(mock_channel, mock_process):
     session = AppSession("cmd", mock_channel)
     exit_payload = json.dumps({"type": "exit"}).encode()
-    proc = mock_process(b"__GANGLION__\n" + encode_packet(b"M", exit_payload), returncode=0)
+    proc = mock_process(
+        b"__GANGLION__\n" + encode_packet(b"M", exit_payload), returncode=0
+    )
 
     await session.run()
 
@@ -116,7 +120,9 @@ async def test_run_handles_exit_meta_packet(mock_channel, mock_process):
 
 
 @pytest.mark.asyncio
-async def test_run_terminates_subprocess_still_running_on_exit(mock_channel, mock_process):
+async def test_run_terminates_subprocess_still_running_on_exit(
+    mock_channel, mock_process
+):
     session = AppSession("cmd", mock_channel)
     mock_process(b"__GANGLION__\n", returncode=None)
 

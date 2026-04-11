@@ -26,10 +26,11 @@ def mock_ssh_conn():
     conn.get_extra_info.return_value = ("127.0.0.1", 12345)
     return conn
 
+
 @pytest.fixture
 def mock_session():
     """Creates an AppSession with a mocked subprocess and stdin"""
-    
+
     session = AppSession("cmd", MagicMock())
     mock_stdin = MagicMock()
     mock_stdin.drain = AsyncMock()
@@ -37,13 +38,14 @@ def mock_session():
     mock_process.stdin = mock_stdin
     mock_process.wait = AsyncMock()
     session._process = mock_process
-    
+
     return session
+
 
 @pytest.fixture
 def mock_process(monkeypatch):
-    """Factory fixture for a mock subprocess.
-    """
+    """Factory fixture for a mock subprocess."""
+
     def _factory(stdout_data=b"__GANGLION__\n", stderr_data=b"", returncode=0):
         stdout = asyncio.StreamReader()
         stdout.feed_data(stdout_data)
@@ -62,7 +64,9 @@ def mock_process(monkeypatch):
         async def _fake_create(*_, **__):
             return proc
 
-        monkeypatch.setattr(_app_session_module.asyncio, "create_subprocess_shell", _fake_create)
+        monkeypatch.setattr(
+            _app_session_module.asyncio, "create_subprocess_shell", _fake_create
+        )
         return proc
 
     return _factory

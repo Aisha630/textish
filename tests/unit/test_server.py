@@ -1,9 +1,7 @@
-import asyncio
 import pytest
-from unittest.mock import MagicMock, patch
-
+from unittest.mock import MagicMock
 from textish.server import TextishSSHServer, TextishSSHServerSession
-from textish.app_session import AppSession
+
 
 @pytest.mark.asyncio
 async def test_pty_requested_stores_dimensions_and_returns_true():
@@ -13,6 +11,7 @@ async def test_pty_requested_stores_dimensions_and_returns_true():
     assert session._cols == 132
     assert session._rows == 50
     assert session._has_pty is True
+
 
 @pytest.mark.asyncio
 async def test_session_started_without_pty_writes_error_and_closes(mock_channel):
@@ -46,18 +45,21 @@ async def test_terminal_size_changed_calls_resize():
 
 
 @pytest.mark.asyncio
-async def test_session_requested_returns_channel_and_correct_session_type(mock_ssh_conn):
+async def test_session_requested_returns_channel_and_correct_session_type(
+    mock_ssh_conn,
+):
     server = TextishSSHServer("cmd")
     mock_channel = MagicMock()
     mock_ssh_conn.create_server_channel.return_value = mock_channel
     server._conn = mock_ssh_conn
 
-    channel, session =  await server.session_requested()
+    channel, session = await server.session_requested()
 
     assert channel is mock_channel
     assert isinstance(session, TextishSSHServerSession)
     assert session._app_command == "cmd"
     mock_ssh_conn.create_server_channel.assert_called_once_with(encoding=None)
+
 
 @pytest.mark.asyncio
 async def test_connection_made_stores_connection(mock_ssh_conn):

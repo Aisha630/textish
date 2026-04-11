@@ -20,7 +20,7 @@ async def test_session_started_without_pty_writes_error_and_closes(mock_channel)
     session = TextishSSHServerSession("cmd")
     session._channel = mock_channel
 
-    await session.session_started()
+    session.session_started()
 
     mock_channel.write.assert_called_once_with(
         b"textish requires an interactive terminal (PTY).\r\n"

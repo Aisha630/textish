@@ -1,5 +1,7 @@
+from asyncssh import session
 import pytest
 from unittest.mock import MagicMock
+import asyncio
 from textish.server import TextishSSHServer, TextishSSHServerSession
 
 
@@ -40,7 +42,7 @@ async def test_terminal_size_changed_calls_resize():
     session._app_session = mock_app_session
 
     session.terminal_size_changed(120, 40, 0, 0)
-
+    await asyncio.sleep(0) # give the event loop a chance to run the resize task
     assert calls == [(120, 40)]
 
 
@@ -53,7 +55,7 @@ async def test_session_requested_returns_channel_and_correct_session_type(
     mock_ssh_conn.create_server_channel.return_value = mock_channel
     server._conn = mock_ssh_conn
 
-    channel, session = await server.session_requested()
+    channel, session = server.session_requested()
 
     assert channel is mock_channel
     assert isinstance(session, TextishSSHServerSession)

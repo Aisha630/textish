@@ -13,11 +13,38 @@ env:
   PYTEST_ADDOPTS: "--color=yes"
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
+  # These three jobs produce the required status checks that branch protection
+  # looks for by name: "Test (Python 3.12)", "Test (Python 3.13)", etc.
+  # They run on ubuntu-latest as the canonical gating build.
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Poetry
+        run: pipx install poetry==2.3.2
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "poetry"
+      - name: Install dependencies
+        run: poetry install --no-interaction
+      - name: Run tests
+        run: poetry run pytest tests -v
+
+  # Cross-platform smoke tests. Not required by branch protection, but failures
+  # are visible on the PR so platform-specific issues are caught before merge.
+  test-os:
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
         python-version: ["3.12", "3.13", "3.14"]
     defaults:
       run:
@@ -33,23 +60,5 @@ jobs:
           cache: "poetry"
       - name: Install dependencies
         run: poetry install --no-interaction
-     
-      - name: Test (Python 3.12)
-        run: |
-          poetry run pytest tests -v 
-        if: ${{ matrix.python-version == '3.12' }}
-      - name: Test (Python 3.13)
-        run: |
-          poetry run pytest tests -v
-        if: ${{ matrix.python-version == '3.13' }}
-      - name: Test (Python 3.14)
-        run: |
-          poetry run pytest tests -v
-        if: ${{ matrix.python-version == '3.14' }}
-      - name: Upload snapshot report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: snapshot_report_textish
-          path: snapshot_report.html
-          overwrite: true
+      - name: Run tests
+        run: poetry run pytest tests -v

@@ -22,7 +22,7 @@ from .app_session import AppSession
 log = logging.getLogger("textish")
 
 
-class TextishSSHServerSession(asyncssh.SSHServerSession): # type: ignore[misc]
+class TextishSSHServerSession(asyncssh.SSHServerSession):  # type: ignore[misc]
     """Bridges one SSH PTY shell session to a Textual app subprocess.
 
     asyncssh calls the methods on this class in response to SSH protocol
@@ -79,7 +79,9 @@ class TextishSSHServerSession(asyncssh.SSHServerSession): # type: ignore[misc]
         that run ``ssh host -p 2222 some-command`` without allocating a TTY).
         For valid PTY sessions, spawns the AppSession and starts its run loop.
         """
-        assert self._channel is not None  # set by connection_made before session_started
+        assert (
+            self._channel is not None
+        )  # set by connection_made before session_started
         if not self._has_pty:
             self._channel.write(b"textish requires an interactive terminal (PTY).\r\n")
             self._channel.close()
@@ -92,7 +94,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession): # type: ignore[misc]
         )
         asyncio.create_task(self._app_session.run())
 
-    def data_received(self, data: bytes, datatype: str | None) -> None:
+    def data_received(self, data: bytes, datatype: int | None) -> None:
         """Called by asyncssh for each chunk of data from the SSH client.
 
         Forwards the raw bytes to the app as a display (``b"D"``) packet.
@@ -202,7 +204,9 @@ class TextishSSHServer(asyncssh.SSHServer):  # type: ignore[misc]
         """
         return self._auth_function is not None
 
-    def session_requested(self) -> tuple[asyncssh.SSHServerChannel, asyncssh.SSHServerSession]:
+    def session_requested(
+        self,
+    ) -> tuple[asyncssh.SSHServerChannel, asyncssh.SSHServerSession]:
         """Called by asyncssh when the client requests a shell session.
 
         Creates the raw-bytes channel and a fresh session handler for this
@@ -224,7 +228,9 @@ class TextishSSHServer(asyncssh.SSHServer):  # type: ignore[misc]
         Exports the key to OpenSSH format and delegates to the user-supplied
         auth function, which may be sync or async.
         """
-        assert self._auth_function is not None  # only called when public_key_auth_supported() is True
+        assert (
+            self._auth_function is not None
+        )  # only called when public_key_auth_supported() is True
         public_key_str = key.export_public_key().decode().strip()
         result = self._auth_function(username, public_key_str)
         if inspect.isawaitable(result):

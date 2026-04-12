@@ -4,8 +4,10 @@ for each connection, and bridges data between it and the SSH channel.
 """
 
 import asyncio
-import asyncssh
 import logging
+from collections.abc import Awaitable, Callable
+
+import asyncssh
 
 from .app_session import AppSession
 
@@ -85,21 +87,60 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
             asyncio.get_running_loop().create_task(self._app_session.close())
 
 
+# created for every ssh connection. handles the 
+# connection and creates a new session for each shell request
 class TextishSSHServer(asyncssh.SSHServer):
     """Handles the SSH connection itself — auth and session creation."""
 
-    def __init__(self, app_command: str) -> None:
-        self._app_command = app_command
+    def __init__(
+        self,
+        app_command: str,
+        max_connections: int,
+        active_connections: set[asyncssh.SSHServerConnection],
+        auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = None,
+    ) -> None:
+        self._app_command: str = app_command
+        self._max_connections: int = max_connections
+        self._active_connections: set[asyncssh.SSHServerConnection] = active_connections
         self._conn: asyncssh.SSHServerConnection | None = None
+        self._auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = (
+            auth_function
+        )
 
     def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
         self._conn = conn
+        if len(self._active_connections) >= self._max_connections > 0:
+            log.warning(
+                "Maximum connections exceeded. Closing new connection from %s",
+                conn.get_extra_info("peername"),
+            )
+            conn.close()
+            return
+        self._active_connections.add(conn)
         log.info("Connection from %s", conn.get_extra_info("peername"))
 
     def begin_auth(self, username: str) -> bool:
-        return False  # no authentication required
+        return (
+            self._auth_function is not None
+        )  # allow anonymous login if no auth function
 
     def session_requested(self):
         channel = self._conn.create_server_channel(encoding=None)
         session = TextishSSHServerSession(self._app_command)
         return channel, session
+
+    def public_key_auth_supported(self):
+        return self._auth_function is not None
+
+    async def validate_public_key(self, username, key):
+        public_key_str = key.export_public_key().decode().strip()
+        result = self._auth_function(username, public_key_str)
+        if asyncio.iscoroutine(result):
+            result = await result
+        return result
+
+    def connection_lost(self, exc):
+        self._active_connections.discard(
+            self._conn
+        )  # don't want to worry about KeyError here since the connection 
+        # might not have been added if it was lost during setup

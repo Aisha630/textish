@@ -1,4 +1,3 @@
-import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,16 +8,17 @@ from textish.protocol import encode_packet
 
 
 @pytest.mark.asyncio
-async def test_send_input_writes_encoded_packet(mock_channel, mock_stdin):
+async def test_send_input_writes_encoded_packet(mock_channel):
+    stdin = MagicMock()
+    stdin.drain = AsyncMock()
     session = AppSession("cmd", mock_channel)
-    mock_process = MagicMock()
-    mock_process.stdin = mock_stdin
-    session._process = mock_process
+    session._process = MagicMock()
+    session._process.stdin = stdin
 
     await session.send_input(b"key")
 
-    mock_stdin.write.assert_called_once_with(encode_packet(b"D", b"key"))
-    mock_stdin.drain.assert_awaited_once()
+    stdin.write.assert_called_once_with(encode_packet(b"D", b"key"))
+    stdin.drain.assert_awaited_once()
 
 
 @pytest.mark.asyncio

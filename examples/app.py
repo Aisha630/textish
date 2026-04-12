@@ -1,8 +1,9 @@
 import random
+
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Static, Input, Label
-from textual.containers import Vertical, Horizontal, Center
+from textual.containers import Center, Horizontal, Vertical
 from textual.reactive import reactive
+from textual.widgets import Footer, Header, Input, Label, Static
 
 WORDS = [
     "crane",
@@ -31,12 +32,12 @@ MIN_ROWS = 28
 def score_guess(guess: str, target: str) -> list[str]:
     result = ["absent"] * WORD_LENGTH
     target_counts: dict[str, int] = {}
-    for i, (g, t) in enumerate(zip(guess, target)):
+    for i, (g, t) in enumerate(zip(guess, target, strict=False)):
         if g == t:
             result[i] = "correct"
         else:
             target_counts[t] = target_counts.get(t, 0) + 1
-    for i, (g, t) in enumerate(zip(guess, target)):
+    for i, (g, _t) in enumerate(zip(guess, target, strict=False)):
         if result[i] != "correct" and g in target_counts and target_counts[g] > 0:
             result[i] = "present"
             target_counts[g] -= 1
@@ -137,7 +138,7 @@ class WordleApp(App):
 
         scores = score_guess(guess, self._target)
         row = len(self.guesses)
-        for col, (letter, score) in enumerate(zip(guess, scores)):
+        for col, (letter, score) in enumerate(zip(guess, scores, strict=False)):
             cell = self.query_one(f"#cell-{row}-{col}", Static)
             cell.update(letter.upper())
             cell.set_classes(f"cell {score}")

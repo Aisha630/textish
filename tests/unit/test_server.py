@@ -1,7 +1,8 @@
-from asyncssh import session
-import pytest
-from unittest.mock import MagicMock
 import asyncio
+from unittest.mock import MagicMock
+
+import pytest
+
 from textish.server import TextishSSHServer, TextishSSHServerSession
 
 
@@ -42,7 +43,7 @@ async def test_terminal_size_changed_calls_resize():
     session._app_session = mock_app_session
 
     session.terminal_size_changed(120, 40, 0, 0)
-    await asyncio.sleep(0) # give the event loop a chance to run the resize task
+    await asyncio.sleep(0)  # give the event loop a chance to run the resize task
     assert calls == [(120, 40)]
 
 

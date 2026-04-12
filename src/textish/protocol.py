@@ -1,4 +1,5 @@
-## the textual webdriver using this packet exchnage protocol [ 1 byte: type ] [ 4 bytes: big-endian size ] [ N bytes: payload ]
+## the textual webdriver using this packet exchnage protocol 
+# [ 1 byte: type ] [ 4 bytes: big-endian size ] [ N bytes: payload ]
 
 import asyncio
 
@@ -21,7 +22,11 @@ def encode_packet(type_byte: bytes, data: bytes) -> bytes:
 
 
 async def read_packet(reader: asyncio.StreamReader) -> tuple[bytes, bytes] | None:
-    """Reads a packet from the given StreamReader and returns a tuple of (type_byte, payload) both in byte format or None if the connection is closed."""
+    """Reads a packet from the given StreamReader.
+
+    Returns a tuple of (type_byte, payload) both in byte format,
+    or None if the connection is closed.
+    """
 
     try:
         type_byte = await reader.readexactly(1)

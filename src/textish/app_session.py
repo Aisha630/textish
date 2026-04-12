@@ -4,6 +4,8 @@ import logging
 import os
 from pathlib import Path
 
+import asyncssh
+
 from textish.types import ProcessState
 
 from .protocol import encode_packet, read_packet
@@ -28,7 +30,7 @@ class AppSession:
     def __init__(
         self,
         app_command: str,
-        channel,
+        channel: asyncssh.SSHServerChannel,
         cols: int = 80,
         rows: int = 24,
         working_dir: str | Path | None = None,
@@ -80,6 +82,8 @@ class AppSession:
             env=env,
             cwd=self._working_dir,
         )
+        assert self._process.stdout is not None
+        assert self._process.stderr is not None
 
         try:
             # The Textual WebDriver prints "__GANGLION__\n" before it starts
@@ -138,7 +142,7 @@ class AppSession:
                 await self._process.wait()
             self._state = ProcessState.STOPPED
 
-    async def _send_meta(self, payload: dict) -> None:
+    async def _send_meta(self, payload: dict[str, object]) -> None:
         """Encode *payload* as JSON and write it as a meta (``b"M"``) packet.
 
         No-ops silently if the process or its stdin is no longer available.
@@ -187,7 +191,11 @@ class AppSession:
             return
         self._state = ProcessState.STOPPING
 
-        if self._process is not None and self._process.stdin is not None:
+        if self._process is None:
+            self._state = ProcessState.STOPPED
+            return
+
+        if self._process.stdin is not None:
             try:
                 await self._send_meta({"type": "quit"})
                 self._process.stdin.close()

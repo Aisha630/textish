@@ -25,6 +25,9 @@ classifiers = [
     "Topic :: Terminals",
 ]
 
+[project.scripts]
+textish = "textish.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/Aisha630/textish"
 Repository = "https://github.com/Aisha630/textish"

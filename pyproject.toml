@@ -44,6 +44,7 @@ test = [
 ]
 lint = [
     "ruff>=0.11.0,<0.12.0",
+    "mypy>=1.10.0,<2.0.0",
 ]
 dev = [
     { include-group = "test" },
@@ -79,6 +80,12 @@ prerelease = false
 [tool.semantic_release.publish]
 dist_glob_patterns = ["dist/*"]
 upload_to_vcs_release = true
+
+[tool.mypy]
+files = ["src/textish"]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

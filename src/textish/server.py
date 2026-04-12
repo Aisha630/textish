@@ -22,7 +22,7 @@ from .app_session import AppSession
 log = logging.getLogger("textish")
 
 
-class TextishSSHServerSession(asyncssh.SSHServerSession):
+class TextishSSHServerSession(asyncssh.SSHServerSession): # type: ignore[misc]
     """Bridges one SSH PTY shell session to a Textual app subprocess.
 
     asyncssh calls the methods on this class in response to SSH protocol
@@ -52,7 +52,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
         self,
         _term_type: str,
         term_size: tuple[int, int, int, int],
-        _term_modes: dict,
+        _term_modes: dict[str, object],
     ) -> bool:
         """Called by asyncssh when the client requests a pseudo-terminal.
 
@@ -79,6 +79,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
         that run ``ssh host -p 2222 some-command`` without allocating a TTY).
         For valid PTY sessions, spawns the AppSession and starts its run loop.
         """
+        assert self._channel is not None  # set by connection_made before session_started
         if not self._has_pty:
             self._channel.write(b"textish requires an interactive terminal (PTY).\r\n")
             self._channel.close()
@@ -144,7 +145,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
             asyncio.create_task(self._app_session.close())
 
 
-class TextishSSHServer(asyncssh.SSHServer):
+class TextishSSHServer(asyncssh.SSHServer):  # type: ignore[misc]
     """Handles the SSH connection layer — authentication and connection limits.
 
     asyncssh instantiates one of these per incoming TCP connection (via the
@@ -208,6 +209,7 @@ class TextishSSHServer(asyncssh.SSHServer):
         client. ``encoding=None`` keeps data as bytes so we can forward the
         binary packet protocol without any codec interference.
         """
+        assert self._conn is not None  # set by connection_made before session_requested
         channel = self._conn.create_server_channel(encoding=None)
         session = TextishSSHServerSession(self._app_command)
         return channel, session
@@ -222,6 +224,7 @@ class TextishSSHServer(asyncssh.SSHServer):
         Exports the key to OpenSSH format and delegates to the user-supplied
         auth function, which may be sync or async.
         """
+        assert self._auth_function is not None  # only called when public_key_auth_supported() is True
         public_key_str = key.export_public_key().decode().strip()
         result = self._auth_function(username, public_key_str)
         if inspect.isawaitable(result):

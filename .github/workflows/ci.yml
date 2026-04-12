@@ -36,6 +36,23 @@ jobs:
       - name: Run tests
         run: poetry run pytest tests -v
 
+  typecheck:
+    name: Type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Poetry
+        run: pipx install poetry==2.3.2
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "poetry"
+      - name: Install dependencies
+        run: poetry install --no-interaction
+      - name: Run mypy
+        run: poetry run mypy
+
   # Cross-platform smoke tests. Not required by branch protection, but failures
   # are visible on the PR so platform-specific issues are caught before merge.
   test-os:

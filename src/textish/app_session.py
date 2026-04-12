@@ -63,11 +63,14 @@ class AppSession:
                     break
 
             if not ready:
-                stderr = (
-                    await self._process.stderr.read(4096)
-                    if self._process.stderr
-                    else b""
-                )
+                try:
+                    stderr = (
+                        await asyncio.wait_for(self._process.stderr.read(4096), timeout=1.0)
+                        if self._process.stderr
+                        else b""
+                    )
+                except (asyncio.TimeoutError, Exception):
+                    stderr = b"(timeout or error reading stderr)"
                 log.error(
                     "WebDriver handshake failed — never received __GANGLION__\n"
                     "Subprocess stderr:\n%s",

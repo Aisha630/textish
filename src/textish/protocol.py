@@ -1,38 +1,52 @@
-## the textual webdriver using this packet exchnage protocol 
-# [ 1 byte: type ] [ 4 bytes: big-endian size ] [ N bytes: payload ]
+"""
+Wire protocol shared between textish and Textual's WebDriver.
+
+Packet layout:
+    [ 1 byte: type ] [ 4 bytes: big-endian payload length ] [ N bytes: payload ]
+
+Known type bytes (defined by Textual's WebDriver):
+    b"D"  — display data to write directly to the terminal
+    b"M"  — JSON meta message (e.g. resize, quit, exit)
+"""
 
 import asyncio
+import struct
 
 
 def encode_packet(type_byte: bytes, data: bytes) -> bytes:
-    """Encodes a packet with the given type and data."""
+    """Encode a single packet in the WebDriver wire format.
+
+    Args:
+        type_byte: Exactly one byte identifying the packet type (e.g. ``b"D"``).
+        data:      Raw payload bytes.
+
+    Returns:
+        The complete framed packet: type byte + 4-byte big-endian length + payload.
+
+    Raises:
+        TypeError:  If either argument is not ``bytes``.
+        ValueError: If ``type_byte`` is not exactly one byte.
+    """
     if not isinstance(type_byte, bytes):
-        raise TypeError("Type byte must be of type bytes.")
+        raise TypeError(f"type_byte must be bytes, got {type(type_byte).__name__}")
     if not isinstance(data, bytes):
-        raise TypeError("Data must be of type bytes.")
-
+        raise TypeError(f"data must be bytes, got {type(data).__name__}")
     if len(type_byte) != 1:
-        raise ValueError("Type byte must be exactly 1 byte long.")
+        raise ValueError(f"type_byte must be exactly 1 byte, got {len(type_byte)}")
 
-    data_size = len(data)
-    data_size_bytes = data_size.to_bytes(
-        4, byteorder="big"
-    )  # convert data size to 4 bytes big-endian as that is the protocol we are using
-    return type_byte + data_size_bytes + data
+    return type_byte + struct.pack(">I", len(data)) + data
 
 
 async def read_packet(reader: asyncio.StreamReader) -> tuple[bytes, bytes] | None:
-    """Reads a packet from the given StreamReader.
+    """Read one packet from *reader* and return ``(type_byte, payload)``.
 
-    Returns a tuple of (type_byte, payload) both in byte format,
-    or None if the connection is closed.
+    Blocks until a full packet is available. Returns ``None`` when the stream
+    is closed or truncated mid-packet (i.e. the subprocess exited).
     """
-
     try:
         type_byte = await reader.readexactly(1)
-        data_size_bytes = await reader.readexactly(4)
-        data_size = int.from_bytes(data_size_bytes, byteorder="big")
-        payload = await reader.readexactly(data_size)
+        length = struct.unpack(">I", await reader.readexactly(4))[0]
+        payload = await reader.readexactly(length)
         return type_byte, payload
     except asyncio.IncompleteReadError:
-        return None  # connection closed before we could read a full packet
+        return None

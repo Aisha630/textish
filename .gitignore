@@ -1,10 +1,26 @@
-# pixi environments
+# environments
 .venv/
 venv/
 .env
+
+# editors
 .vscode/
 **/settings.json
+.idea/
+
+# Python
 **/__pycache__/
 **/*.pyc
+*.egg-info/
+*.egg
+
+# build / distribution
+build/
+dist/
+
+# tools
 .ruff_cache/
 .pytest_cache/
+
+# macOS
+.DS_Store

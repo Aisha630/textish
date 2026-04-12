@@ -87,26 +87,26 @@ A few things worth knowing before you deploy this anywhere serious.
 
 **The app must use Textual's WebDriver.** textish sets `TEXTUAL_DRIVER=textual.drivers.web_driver:WebDriver` in the subprocess environment. If your app overrides the driver or uses something incompatible, the handshake will fail and the connection will be dropped.
 
-**Single-platform.** textish has only been tested on Linux and macOS. 
+**Single-platform.** textish has only been tested on Linux and macOS.
 
 ---
 
 ## Development
 
-Install with the dev dependencies:
+Install with dev dependencies:
 
 ```
-pip install -e ".[dev]"
+poetry install --with dev
 ```
 
 Run the tests:
 
 ```
-pytest
+poetry run pytest
 ```
 
 Lint:
 
 ```
-ruff check src
+poetry run ruff check .
 ```

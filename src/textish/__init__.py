@@ -1,16 +1,15 @@
 """
 textish — serve Textual apps over SSH.
 
-Usage::
+Each incoming SSH connection spawns the Textual app as a fresh subprocess and
+bridges the SSH channel to the subprocess's stdin/stdout via Textual's
+WebDriver packet protocol. The app has no idea it's running over SSH.
+
+Quickstart::
 
     from textish import serve
     serve("python my_app.py", port=2222)
 """
-
-## The main idea: Textual's WebDriver runs apps in a subprocess and communicates
-## over pipes using a simple packet protocol. We reuse that exact mechanism —
-## each SSH connection spawns the app as a subprocess, and we bridge the SSH
-## channel to the subprocess's stdin/stdout. No Textual internals are modified.
 
 import asyncio
 from collections.abc import Awaitable, Callable
@@ -23,7 +22,11 @@ from .server import TextishSSHServer
 
 
 def serve_config(config: AppConfig) -> None:
-    """Start the SSH server using an AppConfig object."""
+    """Start the SSH server from an :class:`~textish.config.AppConfig` instance.
+
+    Convenience wrapper around :func:`serve` for callers that prefer to build
+    configuration as an object rather than passing keyword arguments.
+    """
     serve(
         app_command=config.app_command,
         host=config.host,
@@ -42,7 +45,19 @@ async def serve_async(
     max_connections: int = 0,
     auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = None,
 ) -> None:
-    """Async version of serve(). Use this if you're already inside an event loop."""
+    """Async version of :func:`serve` for use inside a running event loop.
+
+    Args:
+        app_command:     Shell command that launches the Textual app.
+        host:            Address to listen on. Defaults to all interfaces.
+        port:            TCP port to listen on. Defaults to 2222.
+        host_keys:       Paths to SSH host key files. Defaults to
+                         ``~/.ssh/ssh_host_key``.
+        max_connections: Maximum simultaneous sessions. ``0`` = unlimited.
+        auth_function:   Optional public-key validator with signature
+                         ``(username, public_key_str) -> bool``. May be async.
+                         Pass ``None`` to allow all connections.
+    """
     if host_keys is None:
         host_keys = (str(Path("~/.ssh/ssh_host_key").expanduser()),)
 
@@ -67,7 +82,9 @@ async def serve_async(
         finally:
             for conn in set(active_connections):
                 conn.close()
-            await asyncio.sleep(0.1)  # give connections a moment to close
+            # Brief pause to let asyncssh flush close frames before the event
+            # loop shuts down. There is no asyncssh API to await full teardown.
+            await asyncio.sleep(0.1)
 
 
 def serve(
@@ -80,12 +97,21 @@ def serve(
 ) -> None:
     """Start the SSH server and serve a Textual app to connecting clients.
 
+    Blocks until interrupted (e.g. ``Ctrl+C``). For embedding inside an
+    existing event loop, use :func:`serve_async` instead.
+
     Args:
-        app_command: Shell command to run the app, e.g. ``"python my_app.py"``.
-        host:        Host to listen on. Defaults to all interfaces.
-        port:        Port to listen on. Defaults to 2222.
-        host_keys:   Paths to SSH host key files. Generate one with:
-                     ``ssh-keygen -t ed25519 -f ssh_host_key``
+        app_command:     Shell command that launches the Textual app,
+                         e.g. ``"python my_app.py"``.
+        host:            Address to listen on. Defaults to all interfaces.
+        port:            TCP port to listen on. Defaults to 2222.
+        host_keys:       Paths to SSH host key files. Generate one with:
+                         ``ssh-keygen -t ed25519 -f ssh_host_key -N ""``.
+                         Defaults to ``~/.ssh/ssh_host_key``.
+        max_connections: Maximum simultaneous sessions. ``0`` = unlimited.
+        auth_function:   Optional public-key validator with signature
+                         ``(username, public_key_str) -> bool``. May be async.
+                         Pass ``None`` to allow all connections.
     """
     asyncio.run(
         serve_async(app_command, host, port, host_keys, max_connections, auth_function)

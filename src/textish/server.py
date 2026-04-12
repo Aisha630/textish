@@ -22,6 +22,35 @@ from .app_session import AppSession
 log = logging.getLogger("textish")
 
 
+class SessionManager:
+    """Tracks in-flight app session run tasks and orchestrates shutdown.
+
+    Each :class:`TextishSSHServerSession` registers its run task here on
+    startup and the task is automatically removed when it completes.
+    On server shutdown, :meth:`close_all` cancels every tracked task and
+    awaits full cleanup, ensuring no subprocesses are left as orphans.
+    """
+
+    def __init__(self) -> None:
+        self._tasks: set[asyncio.Task[None]] = set()
+
+    def add(self, task: asyncio.Task[None]) -> None:
+        """Register a run task. Automatically removed when the task finishes."""
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def close_all(self) -> None:
+        """Cancel all tracked tasks and wait for them to finish.
+
+        Cancellation triggers each task's ``finally`` block, which terminates
+        the subprocess and closes its SSH channel.
+        """
+        closing = set(self._tasks)
+        for task in closing:
+            task.cancel()
+        await asyncio.gather(*closing, return_exceptions=True)
+
+
 class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
     """Bridges one SSH PTY shell session to a Textual app subprocess.
 
@@ -31,14 +60,17 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
     channel and the app.
     """
 
-    def __init__(self, app_command: str) -> None:
+    def __init__(self, app_command: str, session_manager: SessionManager) -> None:
         """
         Args:
-            app_command: Shell command passed through to ``AppSession``.
+            app_command:     Shell command passed through to ``AppSession``.
+            session_manager: Shared manager that tracks run tasks for shutdown.
         """
         self._app_command = app_command
+        self._session_manager = session_manager
         self._channel: asyncssh.SSHServerChannel[bytes] | None = None
         self._app_session: AppSession | None = None
+        self._run_task: asyncio.Task[None] | None = None
         self._cols: int = 80
         self._rows: int = 24
         self._has_pty: bool = False
@@ -110,7 +142,8 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
             cols=self._cols,
             rows=self._rows,
         )
-        asyncio.create_task(self._app_session.run())
+        self._run_task = asyncio.create_task(self._app_session.run())
+        self._session_manager.add(self._run_task)
         self._input_consumer = asyncio.create_task(self._consume_input())
 
     def data_received(self, data: bytes, datatype: int | None) -> None:
@@ -167,8 +200,11 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
         # Cancel the consumer if eof_received didn't already stop it via sentinel.
         if self._input_consumer is not None and not self._input_consumer.done():
             self._input_consumer.cancel()
-        if self._app_session is not None:
-            asyncio.create_task(self._app_session.close())
+        # Cancelling the run task triggers its finally block, which terminates
+        # the subprocess and closes the channel. This replaces the old
+        # fire-and-forget app_session.close() call.
+        if self._run_task is not None and not self._run_task.done():
+            self._run_task.cancel()
 
 
 class TextishSSHServer(asyncssh.SSHServer):
@@ -185,6 +221,7 @@ class TextishSSHServer(asyncssh.SSHServer):
         app_command: str,
         max_connections: int,
         active_connections: set[asyncssh.SSHServerConnection],
+        session_manager: SessionManager,
         auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = None,
     ) -> None:
         """
@@ -192,12 +229,14 @@ class TextishSSHServer(asyncssh.SSHServer):
             app_command:        Shell command forwarded to each AppSession.
             max_connections:    Maximum simultaneous sessions; ``0`` = unlimited.
             active_connections: Shared set tracked across all server instances.
+            session_manager:    Shared manager that tracks run tasks for shutdown.
             auth_function:      Optional public-key validator. ``None`` allows
                                 all connections without authentication.
         """
         self._app_command: str = app_command
         self._max_connections: int = max_connections
         self._active_connections: set[asyncssh.SSHServerConnection] = active_connections
+        self._session_manager: SessionManager = session_manager
         self._conn: asyncssh.SSHServerConnection | None = None
         self._auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = (
             auth_function
@@ -239,7 +278,7 @@ class TextishSSHServer(asyncssh.SSHServer):
         """
         assert self._conn is not None  # set by connection_made before session_requested
         channel = self._conn.create_server_channel(encoding=None)
-        session = TextishSSHServerSession(self._app_command)
+        session = TextishSSHServerSession(self._app_command, self._session_manager)
         return channel, session
 
     def public_key_auth_supported(self) -> bool:

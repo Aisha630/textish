@@ -5,7 +5,7 @@ import pytest
 
 import textish.app_session as _app_session_module
 from textish.app_session import AppSession
-from textish.server import TextishSSHServer
+from textish.server import SessionManager, TextishSSHServer
 from textish.types import ProcessState
 
 
@@ -46,6 +46,7 @@ def make_server():
             app_command,
             max_connections=max_connections,
             active_connections=set(),
+            session_manager=SessionManager(),
             auth_function=auth_function,
         )
 

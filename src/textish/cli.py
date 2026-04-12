@@ -4,10 +4,11 @@ Invoked as ``textish <app_command> [options]`` after installation.
 """
 
 import argparse
+import logging
 import sys
 
-from .config import AppConfig
 from . import serve_config
+from .config import AppConfig
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -45,12 +46,24 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Maximum simultaneous SSH sessions. 0 means unlimited.",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable debug logging.",
+    )
     return parser
 
 
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     try:
         config = AppConfig(
@@ -63,7 +76,10 @@ def main() -> None:
     except ValueError as e:
         parser.error(str(e))
 
-    print(f"Serving on {config.host}:{config.port} — connect with: ssh -p {config.port} {config.host}")
+    print(
+        f"Serving on {config.host}:{config.port} — connect with: ssh -p ",
+        f"{config.port} {config.host}",
+    )
 
     try:
         serve_config(config)

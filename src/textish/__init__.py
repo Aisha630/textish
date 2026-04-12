@@ -18,7 +18,7 @@ from pathlib import Path
 import asyncssh
 
 from .config import AppConfig
-from .server import TextishSSHServer
+from .server import SessionManager, TextishSSHServer
 
 
 def serve_config(config: AppConfig) -> None:
@@ -62,12 +62,14 @@ async def serve_async(
         host_keys = (str(Path("~/.ssh/ssh_host_key").expanduser()),)
 
     active_connections: set[asyncssh.SSHServerConnection] = set()
+    session_manager = SessionManager()
 
     server = await asyncssh.create_server(
         lambda: TextishSSHServer(
             app_command,
             max_connections=max_connections,
             active_connections=active_connections,
+            session_manager=session_manager,
             auth_function=auth_function,
         ),
         host,
@@ -80,11 +82,10 @@ async def serve_async(
         except asyncio.CancelledError:
             pass
         finally:
-            for conn in set(active_connections):
-                conn.close()
-            # Brief pause to let asyncssh flush close frames before the event
-            # loop shuts down. There is no asyncssh API to await full teardown.
-            await asyncio.sleep(0.1)
+            # asyncSSH does not clean up subprocesses on server shutdown.
+            # close_all() cancels every run task; each task's finally block
+            # terminates its subprocess and closes its SSH channel.
+            await session_manager.close_all()
 
 
 def serve(

@@ -2,9 +2,9 @@ from enum import Enum, auto
 
 
 class ProcessState(Enum):
-    """Represents the state of the Textual app process."""
+    """Lifecycle states for the Textual app subprocess managed by AppSession."""
 
-    PENDING = auto()
-    RUNNING = auto()
-    STOPPING = auto()
-    STOPPED = auto()
+    PENDING = auto()   # created, subprocess not yet launched
+    RUNNING = auto()   # handshake succeeded, forwarding packets
+    STOPPING = auto()  # quit signal sent, waiting for the process to exit
+    STOPPED = auto()   # process has exited, session is done

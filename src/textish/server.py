@@ -4,6 +4,7 @@ for each connection, and bridges data between it and the SSH channel.
 """
 
 import asyncio
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -53,20 +54,18 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
             cols=self._cols,
             rows=self._rows,
         )
-        asyncio.get_running_loop().create_task(self._app_session.run())
+        asyncio.create_task(self._app_session.run())
 
     def data_received(self, data: bytes, datatype) -> None:
         if self._app_session is not None:
-            asyncio.get_running_loop().create_task(self._app_session.send_input(data))
+            asyncio.create_task(self._app_session.send_input(data))
 
     def terminal_size_changed(
         self, width: int, height: int, pixwidth: int, pixheight: int
     ) -> None:
         self._cols, self._rows = width, height
         if self._app_session is not None:
-            asyncio.get_running_loop().create_task(
-                self._app_session.resize(width, height)
-            )
+            asyncio.create_task(self._app_session.resize(width, height))
 
     def eof_received(self) -> bool:
         if self._channel is not None:
@@ -75,20 +74,18 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
             except Exception:
                 pass
         if self._app_session is not None:
-            asyncio.get_running_loop().create_task(self._app_session.close())
+            asyncio.create_task(self._app_session.close())
         return False
 
-    def connection_lost(self, _exc: Exception | None) -> None:
-        if _exc:
-            log.warning("Connection lost with error: %s", _exc)
+    def connection_lost(self, exc: Exception | None) -> None:
+        if exc:
+            log.warning("Connection lost with error: %s", exc)
         else:
             log.info("Connection closed")
         if self._app_session is not None:
-            asyncio.get_running_loop().create_task(self._app_session.close())
+            asyncio.create_task(self._app_session.close())
 
 
-# created for every ssh connection. handles the 
-# connection and creates a new session for each shell request
 class TextishSSHServer(asyncssh.SSHServer):
     """Handles the SSH connection itself — auth and session creation."""
 
@@ -120,9 +117,7 @@ class TextishSSHServer(asyncssh.SSHServer):
         log.info("Connection from %s", conn.get_extra_info("peername"))
 
     def begin_auth(self, username: str) -> bool:
-        return (
-            self._auth_function is not None
-        )  # allow anonymous login if no auth function
+        return self._auth_function is not None
 
     def session_requested(self):
         channel = self._conn.create_server_channel(encoding=None)
@@ -135,12 +130,9 @@ class TextishSSHServer(asyncssh.SSHServer):
     async def validate_public_key(self, username, key):
         public_key_str = key.export_public_key().decode().strip()
         result = self._auth_function(username, public_key_str)
-        if asyncio.iscoroutine(result):
+        if inspect.isawaitable(result):
             result = await result
         return result
 
     def connection_lost(self, exc):
-        self._active_connections.discard(
-            self._conn
-        )  # don't want to worry about KeyError here since the connection 
-        # might not have been added if it was lost during setup
+        self._active_connections.discard(self._conn)

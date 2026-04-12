@@ -1,6 +1,47 @@
 # CHANGELOG
 
 
+## v0.2.0 (2026-04-12)
+
+### Bug Fixes
+
+- :bug: Add type hints for asyncssh.SSHServerChannel and Mapping in AppSession and
+  TextishSSHServerSession
+  ([`9c959ee`](https://github.com/Aisha630/textish/commit/9c959ee96b7a9a5a34ca0a8b6b633ada6b7659ac))
+
+- :bug: Validate host_key_path in AppConfig and assert process in AppSession
+  ([`f21e8ed`](https://github.com/Aisha630/textish/commit/f21e8ede80bd7722a8c9e26f5024a63d552771da))
+
+### Chores
+
+- :heavy_plus_sign: Add new dependencies for pre-commit and update lock file
+  ([`01006c7`](https://github.com/Aisha630/textish/commit/01006c73da5a10a8d0a467f07598fcd788e877f3))
+
+- Update lockfile
+  ([`fa4a851`](https://github.com/Aisha630/textish/commit/fa4a851cb7e7f32f7d355107fd7db57ec6bf2895))
+
+### Code Style
+
+- :label: Add type checking with mypy and enhance AppSession and server classes with type hints
+  ([`6ae1860`](https://github.com/Aisha630/textish/commit/6ae18604df7c7dbac74eb4d94136a68de1876b2b))
+
+### Documentation
+
+- :memo: Update README with cli information
+  ([`5951bdf`](https://github.com/Aisha630/textish/commit/5951bdf7f8f699ecb0891034e0b65216dee3fd17))
+
+### Features
+
+- :sparkles: Implement command-line interface and enhance AppConfig validation
+  ([`fb14446`](https://github.com/Aisha630/textish/commit/fb14446dff92783ad30deb246f8723d20bdfa6dd))
+
+- :sparkles: Implement input queue and consumer for ordered data handling in TextishSSHServerSession
+  ([`7cbd1cb`](https://github.com/Aisha630/textish/commit/7cbd1cb9a899539ccce79fd8d6103452fb0dab64))
+
+- :sparkles: Introduce SessionManager for managing app session tasks and and allow verbose logging
+  ([`7105913`](https://github.com/Aisha630/textish/commit/71059132d416dc3685d604bf44814ac3d9aec963))
+
+
 ## v0.1.0 (2026-04-12)
 
 ### Bug Fixes

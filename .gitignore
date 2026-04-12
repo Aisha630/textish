@@ -21,6 +21,7 @@ dist/
 # tools
 .ruff_cache/
 .pytest_cache/
+.mypy_cache/
 
 # macOS
 .DS_Store

@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -29,3 +30,17 @@ class AppConfig:
     host_key_path: str | None = None
     max_connections: int = 0
     auth: Callable[[str, str], bool | Awaitable[bool]] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.host or not self.host.strip():
+            raise ValueError("host must not be empty")
+        if not (1 <= self.port <= 65535):
+            raise ValueError(f"port must be between 1 and 65535, got {self.port}")
+        if not self.app_command or not self.app_command.strip():
+            raise ValueError("app_command must not be empty")
+        if self.max_connections < 0:
+            raise ValueError(
+                f"max_connections must be >= 0 (0 means unlimited), got {self.max_connections}"
+            )
+        if self.host_key_path is not None and not Path(self.host_key_path).exists():
+            raise ValueError(f"host_key_path does not exist: {self.host_key_path}")

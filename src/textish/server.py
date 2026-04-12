@@ -91,7 +91,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):
         )
         asyncio.create_task(self._app_session.run())
 
-    def data_received(self, data: bytes, datatype) -> None:
+    def data_received(self, data: bytes, datatype: str | None) -> None:
         """Called by asyncssh for each chunk of data from the SSH client.
 
         Forwards the raw bytes to the app as a display (``b"D"``) packet.
@@ -201,7 +201,7 @@ class TextishSSHServer(asyncssh.SSHServer):
         """
         return self._auth_function is not None
 
-    def session_requested(self):
+    def session_requested(self) -> tuple[asyncssh.SSHServerChannel, asyncssh.SSHServerSession]:
         """Called by asyncssh when the client requests a shell session.
 
         Creates the raw-bytes channel and a fresh session handler for this
@@ -212,11 +212,11 @@ class TextishSSHServer(asyncssh.SSHServer):
         session = TextishSSHServerSession(self._app_command)
         return channel, session
 
-    def public_key_auth_supported(self):
+    def public_key_auth_supported(self) -> bool:
         """Advertise public-key auth only when a validator is configured."""
         return self._auth_function is not None
 
-    async def validate_public_key(self, username, key):
+    async def validate_public_key(self, username: str, key: asyncssh.SSHKey) -> bool:
         """Called by asyncssh to validate a client's public key.
 
         Exports the key to OpenSSH format and delegates to the user-supplied
@@ -228,7 +228,7 @@ class TextishSSHServer(asyncssh.SSHServer):
             result = await result
         return result
 
-    def connection_lost(self, exc):
+    def connection_lost(self, exc: Exception | None) -> None:
         """Called by asyncssh when the TCP connection closes.
 
         Removes the connection from the active set. ``discard`` is used

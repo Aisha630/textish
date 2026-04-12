@@ -1,6 +1,8 @@
-from textish import protocol
-import pytest
 import asyncio
+
+import pytest
+
+from textish import protocol
 
 
 def test_encode_packet():

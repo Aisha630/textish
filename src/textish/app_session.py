@@ -4,6 +4,8 @@ import logging
 import os
 from pathlib import Path
 
+from textish.types import ProcessState
+
 from .protocol import encode_packet, read_packet
 
 log = logging.getLogger("textish")
@@ -27,6 +29,7 @@ class AppSession:
         self._rows = rows
         self._working_dir = working_dir
         self._process: asyncio.subprocess.Process | None = None
+        self._state = ProcessState.PENDING
 
     async def run(self) -> None:
         """Spawn the subprocess and forward its output to the SSH channel."""
@@ -68,6 +71,8 @@ class AppSession:
                 )
                 return
 
+            self._state = ProcessState.RUNNING
+
             while True:
                 result = await read_packet(self._process.stdout)
                 if result is None:
@@ -78,15 +83,19 @@ class AppSession:
                 elif type_byte == b"M":
                     meta = json.loads(payload)
                     if meta.get("type") == "exit":
-                        # wait for 3 seconds to allow subprocess to exit gracefully, then kill if it's still running
+                        # wait for 3 seconds to allow subprocess to exit gracefully,
+                        # then kill if it's still running
                         await asyncio.wait_for(self._process.wait(), timeout=3.0)
 
         finally:
-            # Terminate the subprocess forcibly if it's still running, and close the SSH channel
+            # Terminate the subprocess forcibly if it's still running,
+            # and close the SSH channel
+            self._state = ProcessState.STOPPING
             self._channel.close()
             if self._process is not None and self._process.returncode is None:
                 self._process.terminate()
                 await self._process.wait()
+            self._state = ProcessState.STOPPED
 
     async def send_input(self, data: bytes) -> None:
         """Forward a keypress from the SSH client to the app."""
@@ -113,7 +122,11 @@ class AppSession:
 
     async def close(self) -> None:
         """Tell the app to quit and ensure the subprocess is killed."""
+        if self._state is not ProcessState.RUNNING:
+            return
+        self._state = ProcessState.STOPPING
         if self._process is None:
+            self._state = ProcessState.STOPPED
             return
 
         if self._process.stdin is not None:
@@ -127,7 +140,8 @@ class AppSession:
 
         try:
             await asyncio.wait_for(self._process.wait(), timeout=3.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.warning("Subprocess did not exit after quit signal, killing.")
             self._process.kill()
             await self._process.wait()
+        self._state = ProcessState.STOPPED

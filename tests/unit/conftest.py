@@ -1,8 +1,10 @@
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock
-from textish.app_session import AppSession
+
+import pytest
+
 import textish.app_session as _app_session_module
+from textish.app_session import AppSession
 
 
 @pytest.fixture

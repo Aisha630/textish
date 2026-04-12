@@ -3,12 +3,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from textish.server import TextishSSHServerSession
+from textish.server import SessionManager, TextishSSHServerSession
 
 
 @pytest.mark.asyncio
 async def test_pty_requested_stores_dimensions_and_returns_true():
-    session = TextishSSHServerSession("cmd")
+    session = TextishSSHServerSession("cmd", SessionManager())
     result = session.pty_requested("xterm", (132, 50, 0, 0), {})
     assert result is True
     assert session._cols == 132
@@ -18,7 +18,7 @@ async def test_pty_requested_stores_dimensions_and_returns_true():
 
 @pytest.mark.asyncio
 async def test_session_started_without_pty_writes_error_and_closes(mock_channel):
-    session = TextishSSHServerSession("cmd")
+    session = TextishSSHServerSession("cmd", SessionManager())
     session._channel = mock_channel
 
     session.session_started()
@@ -32,7 +32,7 @@ async def test_session_started_without_pty_writes_error_and_closes(mock_channel)
 
 @pytest.mark.asyncio
 async def test_terminal_size_changed_calls_resize():
-    session = TextishSSHServerSession("cmd")
+    session = TextishSSHServerSession("cmd", SessionManager())
     calls = []
 
     async def fake_resize(cols, rows):

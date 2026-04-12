@@ -50,6 +50,7 @@ dev = [
     { include-group = "test" },
     { include-group = "lint" },
     "tox>=4.0.0,<5.0.0",
+    "pre-commit>=4.0.0,<5.0.0",
 ]
 release = [
     "python-semantic-release>=9.0.0,<10.0.0",

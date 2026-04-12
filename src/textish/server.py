@@ -42,6 +42,8 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
         self._cols: int = 80
         self._rows: int = 24
         self._has_pty: bool = False
+        self._input_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._input_consumer: asyncio.Task[None] | None = None
 
     def connection_made(self, chan: asyncssh.SSHServerChannel[bytes]) -> None:
         """Called by asyncssh when the SSH channel is established."""
@@ -72,6 +74,22 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
         """
         return True
 
+    async def _consume_input(self) -> None:
+        """Drain the input queue in order, forwarding each chunk to the app.
+
+        Runs as a single consumer so chunks are always delivered to the
+        subprocess in the order they were received, with no risk of
+        concurrent ``send_input`` calls interleaving writes.  A ``None``
+        sentinel stops the loop gracefully once all preceding data has
+        been forwarded.
+        """
+        while True:
+            data = await self._input_queue.get()
+            if data is None:
+                break
+            if self._app_session is not None:
+                await self._app_session.send_input(data)
+
     def session_started(self) -> None:
         """Called by asyncssh when the channel is fully open and ready.
 
@@ -93,14 +111,15 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
             rows=self._rows,
         )
         asyncio.create_task(self._app_session.run())
+        self._input_consumer = asyncio.create_task(self._consume_input())
 
     def data_received(self, data: bytes, datatype: int | None) -> None:
         """Called by asyncssh for each chunk of data from the SSH client.
 
-        Forwards the raw bytes to the app as a display (``b"D"``) packet.
+        Enqueues the raw bytes so the single consumer coroutine forwards
+        them to the app in arrival order.
         """
-        if self._app_session is not None:
-            asyncio.create_task(self._app_session.send_input(data))
+        self._input_queue.put_nowait(data)
 
     def terminal_size_changed(
         self, width: int, height: int, pixwidth: int, pixheight: int
@@ -128,6 +147,8 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
                 self._channel.write(b"\x1b[?1049l")
             except Exception:
                 pass
+        # Sentinel stops the consumer after it drains any queued data.
+        self._input_queue.put_nowait(None)
         if self._app_session is not None:
             asyncio.create_task(self._app_session.close())
         return False
@@ -143,6 +164,9 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
             log.warning("Connection lost with error: %s", exc)
         else:
             log.info("Connection closed")
+        # Cancel the consumer if eof_received didn't already stop it via sentinel.
+        if self._input_consumer is not None and not self._input_consumer.done():
+            self._input_consumer.cancel()
         if self._app_session is not None:
             asyncio.create_task(self._app_session.close())
 

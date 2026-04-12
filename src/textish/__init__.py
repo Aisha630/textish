@@ -118,4 +118,4 @@ def serve(
     )
 
 
-__all__ = ["serve", "serve_async", "serve_config"]
+__all__ = ["serve", "serve_async", "serve_config", "AppConfig"]

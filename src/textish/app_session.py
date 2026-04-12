@@ -10,6 +10,8 @@ from .protocol import encode_packet, read_packet
 
 log = logging.getLogger("textish")
 
+_GRACEFUL_EXIT_TIMEOUT = 3.0
+
 
 class AppSession:
     """Manages a single user's session. Spawns the Textual app as a subprocess
@@ -62,7 +64,9 @@ class AppSession:
 
             if not ready:
                 stderr = (
-                    await self._process.stderr.read() if self._process.stderr else b""
+                    await self._process.stderr.read(4096)
+                    if self._process.stderr
+                    else b""
                 )
                 log.error(
                     "WebDriver handshake failed — never received __GANGLION__\n"
@@ -83,13 +87,11 @@ class AppSession:
                 elif type_byte == b"M":
                     meta = json.loads(payload)
                     if meta.get("type") == "exit":
-                        # wait for 3 seconds to allow subprocess to exit gracefully,
-                        # then kill if it's still running
-                        await asyncio.wait_for(self._process.wait(), timeout=3.0)
+                        await asyncio.wait_for(
+                            self._process.wait(), timeout=_GRACEFUL_EXIT_TIMEOUT
+                        )
 
         finally:
-            # Terminate the subprocess forcibly if it's still running,
-            # and close the SSH channel
             self._state = ProcessState.STOPPING
             self._channel.close()
             if self._process is not None and self._process.returncode is None:
@@ -97,49 +99,49 @@ class AppSession:
                 await self._process.wait()
             self._state = ProcessState.STOPPED
 
+    async def _send_meta(self, payload: dict) -> None:
+        """Write a meta packet to the subprocess stdin and flush."""
+        if self._process is None or self._process.stdin is None:
+            return
+        self._process.stdin.write(encode_packet(b"M", json.dumps(payload).encode()))
+        await self._process.stdin.drain()
+
     async def send_input(self, data: bytes) -> None:
         """Forward a keypress from the SSH client to the app."""
-        if self._process is not None and self._process.stdin is not None:
-            try:
-                self._process.stdin.write(encode_packet(b"D", data))
-                await self._process.stdin.drain()
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+        if self._process is None or self._process.stdin is None:
+            return
+        try:
+            self._process.stdin.write(encode_packet(b"D", data))
+            await self._process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     async def resize(self, cols: int, rows: int) -> None:
         """Notify the app that the terminal was resized."""
         self._cols = cols
         self._rows = rows
-        if self._process is not None and self._process.stdin is not None:
-            try:
-                meta = json.dumps(
-                    {"type": "resize", "width": cols, "height": rows}
-                ).encode()
-                self._process.stdin.write(encode_packet(b"M", meta))
-                await self._process.stdin.drain()
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+        try:
+            await self._send_meta({"type": "resize", "width": cols, "height": rows})
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     async def close(self) -> None:
         """Tell the app to quit and ensure the subprocess is killed."""
         if self._state is not ProcessState.RUNNING:
             return
         self._state = ProcessState.STOPPING
-        if self._process is None:
-            self._state = ProcessState.STOPPED
-            return
 
-        if self._process.stdin is not None:
+        if self._process is not None and self._process.stdin is not None:
             try:
-                meta = json.dumps({"type": "quit"}).encode()
-                self._process.stdin.write(encode_packet(b"M", meta))
-                await self._process.stdin.drain()
+                await self._send_meta({"type": "quit"})
                 self._process.stdin.close()
             except Exception:
-                pass
+                log.debug("Error sending quit signal to subprocess.", exc_info=True)
 
         try:
-            await asyncio.wait_for(self._process.wait(), timeout=3.0)
+            await asyncio.wait_for(
+                self._process.wait(), timeout=_GRACEFUL_EXIT_TIMEOUT
+            )
         except TimeoutError:
             log.warning("Subprocess did not exit after quit signal, killing.")
             self._process.kill()

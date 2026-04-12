@@ -16,14 +16,6 @@ def mock_channel():
 
 
 @pytest.fixture
-def mock_stdin():
-    """Mock subprocess stdin."""
-    stdin = MagicMock()
-    stdin.drain = AsyncMock()
-    return stdin
-
-
-@pytest.fixture
 def mock_ssh_conn():
     """Mock asyncssh SSH server connection."""
     conn = MagicMock()
@@ -33,17 +25,15 @@ def mock_ssh_conn():
 
 @pytest.fixture
 def mock_session():
-    """Creates an AppSession with a mocked subprocess and stdin"""
-
+    """AppSession with a mocked subprocess in the RUNNING state."""
     session = AppSession("cmd", MagicMock())
     session._state = ProcessState.RUNNING
-    mock_stdin = MagicMock()
-    mock_stdin.drain = AsyncMock()
-    mock_process = MagicMock()
-    mock_process.stdin = mock_stdin
-    mock_process.wait = AsyncMock()
-    session._process = mock_process
-
+    stdin = MagicMock()
+    stdin.drain = AsyncMock()
+    process = MagicMock()
+    process.stdin = stdin
+    process.wait = AsyncMock()
+    session._process = process
     return session
 
 

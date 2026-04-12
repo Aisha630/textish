@@ -30,7 +30,7 @@ class AppSession:
     def __init__(
         self,
         app_command: str,
-        channel: asyncssh.SSHServerChannel,
+        channel: asyncssh.SSHServerChannel[bytes],
         cols: int = 80,
         rows: int = 24,
         working_dir: str | Path | None = None,

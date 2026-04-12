@@ -40,7 +40,12 @@ class AppConfig:
             raise ValueError("app_command must not be empty")
         if self.max_connections < 0:
             raise ValueError(
-                f"max_connections must be >= 0 (0 means unlimited), got {self.max_connections}"
+                f"max_connections must be >= 0 (0 means unlimited), "
+                f"got {self.max_connections}"
             )
-        if self.host_key_path is not None and not Path(self.host_key_path).exists():
-            raise ValueError(f"host_key_path does not exist: {self.host_key_path}")
+        if self.host_key_path is not None:
+            path = Path(self.host_key_path).expanduser()
+            if not path.exists():
+                raise ValueError(f"host_key_path does not exist: {self.host_key_path}")
+            if not path.is_file():
+                raise ValueError(f"host_key_path is not a file: {self.host_key_path}")

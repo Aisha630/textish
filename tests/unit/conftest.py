@@ -5,6 +5,8 @@ import pytest
 
 import textish.app_session as _app_session_module
 from textish.app_session import AppSession
+from textish.server import TextishSSHServer
+from textish.types import ProcessState
 
 
 @pytest.fixture
@@ -34,6 +36,7 @@ def mock_session():
     """Creates an AppSession with a mocked subprocess and stdin"""
 
     session = AppSession("cmd", MagicMock())
+    session._state = ProcessState.RUNNING
     mock_stdin = MagicMock()
     mock_stdin.drain = AsyncMock()
     mock_process = MagicMock()
@@ -42,6 +45,21 @@ def mock_session():
     session._process = mock_process
 
     return session
+
+
+@pytest.fixture
+def make_server():
+    """Factory fixture for a TextishSSHServer with required args pre-filled."""
+
+    def _factory(app_command="cmd", max_connections=0, auth_function=None):
+        return TextishSSHServer(
+            app_command,
+            max_connections=max_connections,
+            active_connections=set(),
+            auth_function=auth_function,
+        )
+
+    return _factory
 
 
 @pytest.fixture

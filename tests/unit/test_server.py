@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from textish.server import TextishSSHServer, TextishSSHServerSession
+from textish.server import TextishSSHServerSession
 
 
 @pytest.mark.asyncio
@@ -49,9 +49,9 @@ async def test_terminal_size_changed_calls_resize():
 
 @pytest.mark.asyncio
 async def test_session_requested_returns_channel_and_correct_session_type(
-    mock_ssh_conn,
+    mock_ssh_conn, make_server
 ):
-    server = TextishSSHServer("cmd")
+    server = make_server()
     mock_channel = MagicMock()
     mock_ssh_conn.create_server_channel.return_value = mock_channel
     server._conn = mock_ssh_conn
@@ -65,7 +65,7 @@ async def test_session_requested_returns_channel_and_correct_session_type(
 
 
 @pytest.mark.asyncio
-async def test_connection_made_stores_connection(mock_ssh_conn):
-    server = TextishSSHServer("cmd")
+async def test_connection_made_stores_connection(mock_ssh_conn, make_server):
+    server = make_server()
     server.connection_made(mock_ssh_conn)
     assert server._conn is mock_ssh_conn

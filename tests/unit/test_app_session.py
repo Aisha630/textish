@@ -77,7 +77,7 @@ async def test_close_kills_process_on_timeout(mock_session):
     session = mock_session
 
     with patch(
-        "textish.app_session.asyncio.wait_for", side_effect=asyncio.TimeoutError
+        "textish.app_session.asyncio.wait_for", side_effect=TimeoutError
     ):
         await session.close()
 

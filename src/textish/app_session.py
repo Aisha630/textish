@@ -82,6 +82,8 @@ class AppSession:
             env=env,
             cwd=self._working_dir,
         )
+
+        assert self._process is not None
         assert self._process.stdout is not None
         assert self._process.stderr is not None
 
@@ -203,9 +205,7 @@ class AppSession:
                 log.debug("Error sending quit signal to subprocess.", exc_info=True)
 
         try:
-            await asyncio.wait_for(
-                self._process.wait(), timeout=_GRACEFUL_EXIT_TIMEOUT
-            )
+            await asyncio.wait_for(self._process.wait(), timeout=_GRACEFUL_EXIT_TIMEOUT)
         except TimeoutError:
             log.warning("Subprocess did not exit after quit signal, killing.")
             self._process.kill()

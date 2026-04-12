@@ -13,7 +13,7 @@ Two asyncssh classes work together for every incoming connection:
 import asyncio
 import inspect
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 
 import asyncssh
 
@@ -22,7 +22,7 @@ from .app_session import AppSession
 log = logging.getLogger("textish")
 
 
-class TextishSSHServerSession(asyncssh.SSHServerSession):  # type: ignore[misc]
+class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
     """Bridges one SSH PTY shell session to a Textual app subprocess.
 
     asyncssh calls the methods on this class in response to SSH protocol
@@ -37,13 +37,13 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):  # type: ignore[misc]
             app_command: Shell command passed through to ``AppSession``.
         """
         self._app_command = app_command
-        self._channel: asyncssh.SSHServerChannel | None = None
+        self._channel: asyncssh.SSHServerChannel[bytes] | None = None
         self._app_session: AppSession | None = None
         self._cols: int = 80
         self._rows: int = 24
         self._has_pty: bool = False
 
-    def connection_made(self, chan: asyncssh.SSHServerChannel) -> None:
+    def connection_made(self, chan: asyncssh.SSHServerChannel[bytes]) -> None:
         """Called by asyncssh when the SSH channel is established."""
         self._channel = chan
         log.info("Channel opened")
@@ -52,7 +52,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):  # type: ignore[misc]
         self,
         _term_type: str,
         term_size: tuple[int, int, int, int],
-        _term_modes: dict[str, object],
+        _term_modes: Mapping[int, int],
     ) -> bool:
         """Called by asyncssh when the client requests a pseudo-terminal.
 
@@ -147,7 +147,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession):  # type: ignore[misc]
             asyncio.create_task(self._app_session.close())
 
 
-class TextishSSHServer(asyncssh.SSHServer):  # type: ignore[misc]
+class TextishSSHServer(asyncssh.SSHServer):
     """Handles the SSH connection layer — authentication and connection limits.
 
     asyncssh instantiates one of these per incoming TCP connection (via the
@@ -206,7 +206,7 @@ class TextishSSHServer(asyncssh.SSHServer):  # type: ignore[misc]
 
     def session_requested(
         self,
-    ) -> tuple[asyncssh.SSHServerChannel, asyncssh.SSHServerSession]:
+    ) -> tuple[asyncssh.SSHServerChannel[bytes], asyncssh.SSHServerSession[bytes]]:
         """Called by asyncssh when the client requests a shell session.
 
         Creates the raw-bytes channel and a fresh session handler for this

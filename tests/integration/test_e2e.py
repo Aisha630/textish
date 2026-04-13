@@ -151,7 +151,8 @@ async def test_server_cleans_up_after_client_disconnects(ssh_server):
 
     host, port = ssh_server
 
-    before = {p.pid for p in psutil.process_iter()}
+    current_process = psutil.Process()
+    before = {p.pid for p in current_process.children(recursive=True)}
 
     async with asyncssh.connect(
         host,
@@ -176,10 +177,13 @@ async def test_server_cleans_up_after_client_disconnects(ssh_server):
         finally:
             process.close()
 
-    # Give the server a moment to reap the subprocess.
-    await asyncio.sleep(0.5)
-
-    after = {p.pid for p in psutil.process_iter()}
-    new_pids = after - before
+    # Poll until all child processes spawned during the test are reaped.
+    deadline = asyncio.get_running_loop().time() + 5.0
+    while asyncio.get_running_loop().time() < deadline:
+        after = {p.pid for p in current_process.children(recursive=True)}
+        new_pids = after - before
+        if not new_pids:
+            break
+        await asyncio.sleep(0.05)
     # No new processes should be lingering after disconnect.
     assert not new_pids, f"orphan processes after disconnect: {new_pids}"

@@ -1,9 +1,7 @@
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import textish.app_session as _app_session_module
 from textish.app_session import AppSession
 from textish.server import SessionManager, TextishSSHServer
 from textish.types import ProcessState
@@ -28,10 +26,8 @@ def mock_session():
     """AppSession with a mocked subprocess in the RUNNING state."""
     session = AppSession("cmd", MagicMock())
     session._state = ProcessState.RUNNING
-    stdin = MagicMock()
-    stdin.drain = AsyncMock()
     process = MagicMock()
-    process.stdin = stdin
+    process.returncode = None
     process.wait = AsyncMock()
     session._process = process
     return session
@@ -41,43 +37,19 @@ def mock_session():
 def make_server():
     """Factory fixture for a TextishSSHServer with required args pre-filled."""
 
-    def _factory(app_command="cmd", max_connections=0, auth_function=None):
+    def _factory(
+        app_command="cmd",
+        max_connections=0,
+        auth_function=None,
+        env=None,
+    ):
         return TextishSSHServer(
             app_command,
             max_connections=max_connections,
             active_connections=set(),
             session_manager=SessionManager(),
             auth_function=auth_function,
+            env=env,
         )
-
-    return _factory
-
-
-@pytest.fixture
-def mock_process(monkeypatch):
-    """Factory fixture for a mock subprocess."""
-
-    def _factory(stdout_data=b"__GANGLION__\n", stderr_data=b"", returncode=0):
-        stdout = asyncio.StreamReader()
-        stdout.feed_data(stdout_data)
-        stdout.feed_eof()
-
-        stderr = asyncio.StreamReader()
-        stderr.feed_data(stderr_data)
-        stderr.feed_eof()
-
-        proc = MagicMock()
-        proc.stdout = stdout
-        proc.stderr = stderr
-        proc.returncode = returncode
-        proc.wait = AsyncMock()
-
-        async def _fake_create(*_, **__):
-            return proc
-
-        monkeypatch.setattr(
-            _app_session_module.asyncio, "create_subprocess_shell", _fake_create
-        )
-        return proc
 
     return _factory

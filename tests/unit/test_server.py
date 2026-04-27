@@ -13,6 +13,7 @@ async def test_pty_requested_stores_dimensions_and_returns_true():
     assert result is True
     assert session._cols == 132
     assert session._rows == 50
+    assert session._term_type == "xterm"
     assert session._has_pty is True
 
 
@@ -62,6 +63,18 @@ async def test_session_requested_returns_channel_and_correct_session_type(
     assert isinstance(session, TextishSSHServerSession)
     assert session._app_command == "cmd"
     mock_ssh_conn.create_server_channel.assert_called_once_with(encoding=None)
+
+
+@pytest.mark.asyncio
+async def test_session_requested_forwards_env_configuration(mock_ssh_conn, make_server):
+    server = make_server(env={"APP_ENV": "configured"})
+    mock_channel = MagicMock()
+    mock_ssh_conn.create_server_channel.return_value = mock_channel
+    server._conn = mock_ssh_conn
+
+    _channel, session = server.session_requested()
+
+    assert session._env == {"APP_ENV": "configured"}
 
 
 @pytest.mark.asyncio

@@ -25,9 +25,9 @@ log = logging.getLogger("textish")
 class SessionManager:
     """Tracks in-flight app session run tasks and orchestrates shutdown.
 
-    Each :class:`TextishSSHServerSession` registers its run task here on
+    Each instance `TextishSSHServerSession` registers its run task here on
     startup and the task is automatically removed when it completes.
-    On server shutdown, :meth:`close_all` cancels every tracked task and
+    On server shutdown, `close_all` cancels every tracked task and
     awaits full cleanup, ensuring no subprocesses are left as orphans.
     """
 
@@ -55,24 +55,32 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
     """Bridges one SSH PTY shell session to a Textual app subprocess.
 
     asyncssh calls the methods on this class in response to SSH protocol
-    events. The session creates an :class:`~textish.app_session.AppSession`
+    events. The session creates an `~textish.app_session.AppSession`
     once a PTY has been negotiated, then routes all data between the SSH
     channel and the app.
     """
 
-    def __init__(self, app_command: str, session_manager: SessionManager) -> None:
+    def __init__(
+        self,
+        app_command: str,
+        session_manager: SessionManager,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
         """
         Args:
             app_command:     Shell command passed through to ``AppSession``.
             session_manager: Shared manager that tracks run tasks for shutdown.
+            env:             Environment variables for the app subprocess.
         """
         self._app_command = app_command
         self._session_manager = session_manager
+        self._env = env
         self._channel: asyncssh.SSHServerChannel[bytes] | None = None
         self._app_session: AppSession | None = None
         self._run_task: asyncio.Task[None] | None = None
         self._cols: int = 80
         self._rows: int = 24
+        self._term_type: str = "xterm-256color"
         self._has_pty: bool = False
         self._input_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._input_consumer: asyncio.Task[None] | None = None
@@ -84,7 +92,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
 
     def pty_requested(
         self,
-        _term_type: str,
+        term_type: str,
         term_size: tuple[int, int, int, int],
         _term_modes: Mapping[int, int],
     ) -> bool:
@@ -95,6 +103,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
         cannot render correctly.
         """
         self._cols, self._rows = term_size[0], term_size[1]
+        self._term_type = term_type or "xterm-256color"
         self._has_pty = True
         return True
 
@@ -102,7 +111,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
         """Called by asyncssh when the client requests an interactive shell.
 
         Always approved; the actual subprocess is launched in
-        :meth:`session_started` once both PTY and shell are confirmed.
+        `session_started` once both PTY and shell are confirmed.
         """
         return True
 
@@ -141,6 +150,8 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
             channel=self._channel,
             cols=self._cols,
             rows=self._rows,
+            term_type=self._term_type,
+            env=self._env,
         )
         self._run_task = asyncio.create_task(self._app_session.run())
         self._session_manager.add(self._run_task)
@@ -182,8 +193,8 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
                 pass
         # Sentinel stops the consumer after it drains any queued data.
         self._input_queue.put_nowait(None)
-        if self._app_session is not None:
-            asyncio.create_task(self._app_session.close())
+        if self._run_task is not None and not self._run_task.done():
+            self._run_task.cancel()
         return False
 
     def connection_lost(self, exc: Exception | None) -> None:
@@ -211,7 +222,7 @@ class TextishSSHServer(asyncssh.SSHServer):
     """Handles the SSH connection layer — authentication and connection limits.
 
     asyncssh instantiates one of these per incoming TCP connection (via the
-    factory lambda in :func:`~textish.serve_async`). It shares the
+    factory lambda in :func:`~textish.serve`). It shares the
     ``active_connections`` set with all sibling instances so the limit is
     enforced across all concurrent connections.
     """
@@ -223,6 +234,7 @@ class TextishSSHServer(asyncssh.SSHServer):
         active_connections: set[asyncssh.SSHServerConnection],
         session_manager: SessionManager,
         auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         """
         Args:
@@ -232,6 +244,7 @@ class TextishSSHServer(asyncssh.SSHServer):
             session_manager:    Shared manager that tracks run tasks for shutdown.
             auth_function:      Optional public-key validator. ``None`` allows
                                 all connections without authentication.
+            env:                Environment variables for each app subprocess.
         """
         self._app_command: str = app_command
         self._max_connections: int = max_connections
@@ -241,6 +254,7 @@ class TextishSSHServer(asyncssh.SSHServer):
         self._auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = (
             auth_function
         )
+        self._env = env
 
     def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
         """Called by asyncssh when a new TCP connection is established.
@@ -274,11 +288,15 @@ class TextishSSHServer(asyncssh.SSHServer):
 
         Creates the raw-bytes channel and a fresh session handler for this
         client. ``encoding=None`` keeps data as bytes so we can forward the
-        binary packet protocol without any codec interference.
+        terminal byte stream without any codec interference.
         """
         assert self._conn is not None  # set by connection_made before session_requested
         channel = self._conn.create_server_channel(encoding=None)
-        session = TextishSSHServerSession(self._app_command, self._session_manager)
+        session = TextishSSHServerSession(
+            self._app_command,
+            self._session_manager,
+            env=self._env,
+        )
         return channel, session
 
     def public_key_auth_supported(self) -> bool:

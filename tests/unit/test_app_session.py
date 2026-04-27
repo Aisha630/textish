@@ -1,74 +1,114 @@
-import json
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import textish.app_session as app_session_module
 from textish.app_session import AppSession
-from textish.protocol import encode_packet
 
 
 @pytest.mark.asyncio
-async def test_send_input_writes_encoded_packet(mock_channel):
-    stdin = MagicMock()
-    stdin.drain = AsyncMock()
+async def test_send_input_writes_raw_bytes_to_pty(mock_channel):
     session = AppSession("cmd", mock_channel)
-    session._process = MagicMock()
-    session._process.stdin = stdin
+    session._master_fd = 123
 
-    await session.send_input(b"key")
+    with patch("textish.app_session.os.write", return_value=3) as write:
+        await session.send_input(b"key")
 
-    stdin.write.assert_called_once_with(encode_packet(b"D", b"key"))
-    stdin.drain.assert_awaited_once()
+    write.assert_called_once()
+    assert write.call_args.args[0] == 123
+    assert bytes(write.call_args.args[1]) == b"key"
 
 
 @pytest.mark.asyncio
-async def test_send_input_handles_broken_pipe(mock_channel):
+async def test_send_input_retries_partial_writes(mock_channel):
     session = AppSession("cmd", mock_channel)
-    stdin = MagicMock()
-    stdin.write.side_effect = BrokenPipeError
-    mock_process = MagicMock()
-    mock_process.stdin = stdin
-    session._process = mock_process
+    session._master_fd = 123
 
-    await session.send_input(b"key")  # must not raise
+    with patch("textish.app_session.os.write", side_effect=[1, 2]) as write:
+        await session.send_input(b"key")
+
+    assert write.call_count == 2
+    assert bytes(write.call_args_list[0].args[1]) == b"key"
+    assert bytes(write.call_args_list[1].args[1]) == b"ey"
 
 
 @pytest.mark.asyncio
-async def test_send_input_handles_connection_reset(mock_channel):
+async def test_send_input_handles_os_error(mock_channel):
     session = AppSession("cmd", mock_channel)
-    stdin = MagicMock()
-    stdin.drain = AsyncMock(side_effect=ConnectionResetError)
-    mock_process = MagicMock()
-    mock_process.stdin = stdin
-    session._process = mock_process
+    session._master_fd = 123
 
-    await session.send_input(b"key")  # must not raise
+    with patch("textish.app_session.os.write", side_effect=OSError):
+        await session.send_input(b"key")  # must not raise
 
 
 @pytest.mark.asyncio
-async def test_resize_sends_correct_meta_packet(mock_session):
+async def test_send_input_waits_when_pty_write_would_block(mock_channel):
+    session = AppSession("cmd", mock_channel)
+    session._master_fd = 123
+
+    writes = [BlockingIOError, 3]
+
+    def fake_write(*args):
+        result = writes.pop(0)
+        if isinstance(result, type) and issubclass(result, Exception):
+            raise result
+        return result
+
+    async def fake_wait(fd):
+        assert fd == 123
+
+    with (
+        patch("textish.app_session.os.write", side_effect=fake_write),
+        patch.object(session, "_wait_for_pty_writable", side_effect=fake_wait),
+    ):
+        await session.send_input(b"key")
+
+
+@pytest.mark.asyncio
+async def test_read_pty_waits_when_read_would_block(mock_channel):
+    session = AppSession("cmd", mock_channel)
+    session._master_fd = 123
+    reads = [BlockingIOError, b"screen"]
+
+    def fake_read(*args):
+        result = reads.pop(0)
+        if isinstance(result, type) and issubclass(result, Exception):
+            raise result
+        return result
+
+    async def fake_wait(fd):
+        assert fd == 123
+
+    with (
+        patch("textish.app_session.os.read", side_effect=fake_read),
+        patch.object(session, "_wait_for_pty_readable", side_effect=fake_wait),
+    ):
+        data = await session._read_pty()
+
+    assert data == b"screen"
+
+
+@pytest.mark.asyncio
+async def test_resize_updates_pty_window_size(mock_session):
     session = mock_session
+    session._master_fd = 123
 
-    await session.resize(120, 40)
+    with patch("textish.app_session.fcntl.ioctl") as ioctl:
+        await session.resize(120, 40)
 
-    expected = encode_packet(
-        b"M", json.dumps({"type": "resize", "width": 120, "height": 40}).encode()
-    )
-
-    session._process.stdin.write.assert_called_once_with(expected)
     assert session._cols == 120
     assert session._rows == 40
+    ioctl.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_close_sends_quit_and_waits(mock_session):
+async def test_close_terminates_and_waits(mock_session):
     session = mock_session
 
     await session.close()
 
-    expected = encode_packet(b"M", json.dumps({"type": "quit"}).encode())
-    session._process.stdin.write.assert_called_once_with(expected)
-    session._process.stdin.close.assert_called_once()
+    session._process.terminate.assert_called_once()
     session._process.wait.assert_awaited()
 
 
@@ -76,9 +116,11 @@ async def test_close_sends_quit_and_waits(mock_session):
 async def test_close_kills_process_on_timeout(mock_session):
     session = mock_session
 
-    with patch(
-        "textish.app_session.asyncio.wait_for", side_effect=TimeoutError
-    ):
+    async def fake_wait_for(awaitable, timeout):
+        awaitable.close()
+        raise TimeoutError
+
+    with patch("textish.app_session.asyncio.wait_for", side_effect=fake_wait_for):
         await session.close()
 
     session._process.kill.assert_called_once()
@@ -86,48 +128,114 @@ async def test_close_kills_process_on_timeout(mock_session):
 
 
 @pytest.mark.asyncio
-async def test_run_handshake_failure_closes_channel(mock_channel, mock_process):
+async def test_run_forwards_pty_output_to_channel(mock_channel, monkeypatch):
     session = AppSession("cmd", mock_channel)
-    mock_process(b"not ganglion\n", stderr_data=b"some error")
+    proc = MagicMock()
+    proc.returncode = 0
+    proc.wait = AsyncMock()
+
+    async def fake_create_subprocess_shell(*args, **kwargs):
+        slave_fd = os.dup(kwargs["stdout"])
+        loop = app_session_module.asyncio.get_running_loop()
+        loop.call_soon(os.write, slave_fd, b"hello screen\n")
+        loop.call_later(0.01, os.close, slave_fd)
+        return proc
+
+    monkeypatch.setattr(
+        app_session_module.asyncio,
+        "create_subprocess_shell",
+        fake_create_subprocess_shell,
+    )
 
     await session.run()
 
+    assert mock_channel.write.call_args is not None
+    assert b"hello screen" in mock_channel.write.call_args.args[0]
     mock_channel.close.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_run_forwards_display_packet_to_channel(mock_channel, mock_process):
+async def test_run_waits_for_subprocess_after_natural_pty_eof(
+    mock_channel, monkeypatch
+):
     session = AppSession("cmd", mock_channel)
-    mock_process(b"__GANGLION__\n" + encode_packet(b"D", b"hello screen"))
+    proc = MagicMock()
+    proc.returncode = None
+    proc.wait = AsyncMock()
 
-    await session.run()
+    async def fake_create_subprocess_shell(*args, **kwargs):
+        return proc
 
-    mock_channel.write.assert_called_once_with(b"hello screen")
-    mock_channel.close.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_run_handles_exit_meta_packet(mock_channel, mock_process):
-    session = AppSession("cmd", mock_channel)
-    exit_payload = json.dumps({"type": "exit"}).encode()
-    proc = mock_process(
-        b"__GANGLION__\n" + encode_packet(b"M", exit_payload), returncode=0
+    monkeypatch.setattr(
+        app_session_module.asyncio,
+        "create_subprocess_shell",
+        fake_create_subprocess_shell,
     )
 
     await session.run()
 
     proc.wait.assert_awaited()
-    mock_channel.close.assert_called_once()
+    proc.terminate.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_run_terminates_subprocess_still_running_on_exit(
-    mock_channel, mock_process
+async def test_run_terminates_subprocess_if_natural_exit_wait_times_out(
+    mock_channel, monkeypatch
 ):
     session = AppSession("cmd", mock_channel)
-    mock_process(b"__GANGLION__\n", returncode=None)
+    proc = MagicMock()
+    proc.returncode = None
+    proc.wait = AsyncMock()
 
-    await session.run()
+    async def fake_create_subprocess_shell(*args, **kwargs):
+        return proc
 
-    session._process.terminate.assert_called_once()
-    session._process.wait.assert_awaited()
+    async def fake_wait_for(awaitable, timeout):
+        awaitable.close()
+        raise TimeoutError
+
+    monkeypatch.setattr(
+        app_session_module.asyncio,
+        "create_subprocess_shell",
+        fake_create_subprocess_shell,
+    )
+
+    with patch("textish.app_session.asyncio.wait_for", side_effect=fake_wait_for):
+        await session.run()
+
+    proc.terminate.assert_called_once()
+
+
+def test_build_subprocess_env_uses_explicit_env_only(mock_channel, monkeypatch):
+    monkeypatch.setenv("TEXTISH_PARENT", "parent")
+    session = AppSession("cmd", mock_channel, env={"APP_ENV": "configured"})
+
+    env = session._build_subprocess_env()
+
+    assert "TEXTISH_PARENT" not in env
+    assert env["APP_ENV"] == "configured"
+    assert env["COLUMNS"] == "80"
+    assert env["ROWS"] == "24"
+    assert env["TERM"] == "xterm-256color"
+
+
+def test_terminal_env_overrides_configured_env(mock_channel, monkeypatch):
+    monkeypatch.setenv("TEXTISH_PARENT", "parent")
+    session = AppSession(
+        "cmd",
+        mock_channel,
+        cols=100,
+        rows=30,
+        term_type="screen",
+        env={"APP_ENV": "configured", "TERM": "ignored"},
+    )
+
+    env = session._build_subprocess_env()
+
+    assert "TEXTISH_PARENT" not in env
+    assert env == {
+        "APP_ENV": "configured",
+        "COLUMNS": "100",
+        "ROWS": "30",
+        "TERM": "screen",
+    }

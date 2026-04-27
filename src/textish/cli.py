@@ -4,11 +4,21 @@ Invoked as ``textish <app_command> [options]`` after installation.
 """
 
 import argparse
+import asyncio
 import logging
 import sys
 
-from . import serve_config
+from . import authorized_keys, serve
 from .config import AppConfig
+
+
+def _parse_env_var(value: str) -> tuple[str, str]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("expected KEY=VALUE")
+    key, env_value = value.split("=", 1)
+    if not key:
+        raise argparse.ArgumentTypeError("environment variable name must not be empty")
+    return key, env_value
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -47,6 +57,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum simultaneous SSH sessions. 0 means unlimited.",
     )
     parser.add_argument(
+        "--authorized-keys",
+        metavar="PATH",
+        default=None,
+        dest="authorized_keys",
+        help="Path to an OpenSSH authorized_keys file. Only listed keys are allowed.",
+    )
+    parser.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        type=_parse_env_var,
+        metavar="KEY=VALUE",
+        help="Environment variable to pass to the app. Can be repeated.",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -65,6 +90,8 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
+    auth = authorized_keys(args.authorized_keys) if args.authorized_keys else None
+
     try:
         config = AppConfig(
             app_command=args.app_command,
@@ -72,6 +99,8 @@ def main() -> None:
             port=args.port,
             host_key_path=args.host_key_path,
             max_connections=args.max_connections,
+            env=dict(args.env),
+            auth=auth,
         )
     except ValueError as e:
         parser.error(str(e))
@@ -82,7 +111,7 @@ def main() -> None:
     )
 
     try:
-        serve_config(config)
+        asyncio.run(serve(config))
     except OSError as e:
         sys.exit(f"Error: {e}")
     except KeyboardInterrupt:

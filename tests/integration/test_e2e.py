@@ -13,7 +13,7 @@ from textwrap import dedent
 import asyncssh
 import pytest
 
-from textish import serve_async
+from textish.server import SessionManager, TextishSSHServer
 
 _TEST_APP = dedent("""\
     from textual.app import App, ComposeResult
@@ -38,7 +38,8 @@ def _free_port() -> int:
 async def ssh_server(tmp_path):
     """Start a textish server on a random port and yield (host, port).
 
-    Cancels the server task and waits for clean shutdown after the test.
+    Uses asyncssh.create_server directly — the server is bound and listening
+    as soon as the fixture yields, so no polling is needed.
     """
     port = _free_port()
 
@@ -49,34 +50,24 @@ async def ssh_server(tmp_path):
     app_path = tmp_path / "app.py"
     app_path.write_text(_TEST_APP)
 
-    server_task = asyncio.create_task(
-        serve_async(
+    active_connections: set[asyncssh.SSHServerConnection] = set()
+    session_manager = SessionManager()
+
+    server = await asyncssh.create_server(
+        lambda: TextishSSHServer(
             f"{sys.executable} {app_path}",
-            host="127.0.0.1",
-            port=port,
-            host_keys=[str(key_path)],
-        )
+            max_connections=0,
+            active_connections=active_connections,
+            session_manager=session_manager,
+        ),
+        "127.0.0.1",
+        port,
+        server_host_keys=[str(key_path)],
     )
 
-    # Poll until the server is accepting connections (up to 5 s).
-    for _ in range(50):
-        try:
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", port), timeout=0.1
-            )
-            writer.close()
-            await writer.wait_closed()
-            break
-        except (TimeoutError, OSError):
-            await asyncio.sleep(0.1)
-    else:
-        server_task.cancel()
-        pytest.fail("textish server did not start within 5 s")
-
-    yield "127.0.0.1", port
-
-    server_task.cancel()
-    await asyncio.gather(server_task, return_exceptions=True)
+    async with server:
+        yield "127.0.0.1", port
+        await session_manager.close_all()
 
 
 async def test_ssh_connect_receives_app_output(ssh_server):
@@ -185,5 +176,4 @@ async def test_server_cleans_up_after_client_disconnects(ssh_server):
         if not new_pids:
             break
         await asyncio.sleep(0.05)
-    # No new processes should be lingering after disconnect.
     assert not new_pids, f"orphan processes after disconnect: {new_pids}"

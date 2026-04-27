@@ -2,17 +2,18 @@
 textish — serve Textual apps over SSH.
 
 Each incoming SSH connection spawns the Textual app as a fresh subprocess and
-bridges the SSH channel to the subprocess's stdin/stdout via Textual's
-WebDriver packet protocol. The app has no idea it's running over SSH.
+bridges the SSH channel to a server-side pseudo-terminal.
 
-Quickstart::
+Quickstart:
 
-    from textish import serve
-    serve("python my_app.py", port=2222)
+    import asyncio
+    from textish import AppConfig, serve
+
+    asyncio.run(serve(AppConfig(app_command="python my_app.py", port=2222)))
 """
 
-import asyncio
-from collections.abc import Awaitable, Callable
+import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import asyncssh
@@ -20,103 +21,87 @@ import asyncssh
 from .config import AppConfig
 from .server import SessionManager, TextishSSHServer
 
-
-def serve_config(config: AppConfig) -> None:
-    """Start the SSH server from an :class:`~textish.config.AppConfig` instance.
-
-    Convenience wrapper around :func:`serve` for callers that prefer to build
-    configuration as an object rather than passing keyword arguments.
-    """
-    serve(
-        app_command=config.app_command,
-        host=config.host,
-        port=config.port,
-        host_keys=(config.host_key_path,) if config.host_key_path else None,
-        max_connections=config.max_connections,
-        auth_function=config.auth,
-    )
+log = logging.getLogger("textish")
 
 
-async def serve_async(
-    app_command: str,
-    host: str = "0.0.0.0",
-    port: int = 2222,
-    host_keys: tuple[str, ...] | list[str] | None = None,
-    max_connections: int = 0,
-    auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = None,
-) -> None:
-    """Async version of :func:`serve` for use inside a running event loop.
+async def serve(config: AppConfig) -> None:
+    """Start the SSH server and serve a Textual app to connecting clients.
+
+    Runs until cancelled.
 
     Args:
-        app_command:     Shell command that launches the Textual app.
-        host:            Address to listen on. Defaults to all interfaces.
-        port:            TCP port to listen on. Defaults to 2222.
-        host_keys:       Paths to SSH host key files. Defaults to
-                         ``~/.ssh/ssh_host_key``.
-        max_connections: Maximum simultaneous sessions. ``0`` = unlimited.
-        auth_function:   Optional public-key validator with signature
-                         ``(username, public_key_str) -> bool``. May be async.
-                         Pass ``None`` to allow all connections.
+        config: Validated server configuration.
     """
-    if host_keys is None:
-        host_keys = (str(Path("~/.ssh/ssh_host_key").expanduser()),)
-
+    # Track connections for graceful shutdown and max_connections enforcement.
     active_connections: set[asyncssh.SSHServerConnection] = set()
     session_manager = SessionManager()
 
     server = await asyncssh.create_server(
         lambda: TextishSSHServer(
-            app_command,
-            max_connections=max_connections,
+            config.app_command,
+            max_connections=config.max_connections,
             active_connections=active_connections,
             session_manager=session_manager,
-            auth_function=auth_function,
+            auth_function=config.auth,
+            env=config.env,
         ),
-        host,
-        port,
-        server_host_keys=list(host_keys),
+        config.host,
+        config.port,
+        server_host_keys=list(config.host_keys),
     )
     async with server:
         try:
             await server.serve_forever()
-        except asyncio.CancelledError:
-            pass
         finally:
-            # asyncSSH does not clean up subprocesses on server shutdown.
-            # close_all() cancels every run task; each task's finally block
-            # terminates its subprocess and closes its SSH channel.
             await session_manager.close_all()
 
 
-def serve(
-    app_command: str,
-    host: str = "0.0.0.0",
-    port: int = 2222,
-    host_keys: tuple[str, ...] | list[str] | None = None,
-    max_connections: int = 0,
-    auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = None,
-) -> None:
-    """Start the SSH server and serve a Textual app to connecting clients.
+def authorized_keys(path: str | Path) -> Callable[[str, str], bool]:
+    """Return an auth function that allows connections whose public key appears
+    in an OpenSSH ``authorized_keys`` file.
 
-    Blocks until interrupted (e.g. ``Ctrl+C``). For embedding inside an
-    existing event loop, use :func:`serve_async` instead.
+    The returned callable is compatible with `AppConfig.auth`.
+
+    The file is re-read on every authentication attempt so changes take effect
+    without restarting the server.
 
     Args:
-        app_command:     Shell command that launches the Textual app,
-                         e.g. ``"python my_app.py"``.
-        host:            Address to listen on. Defaults to all interfaces.
-        port:            TCP port to listen on. Defaults to 2222.
-        host_keys:       Paths to SSH host key files. Generate one with:
-                         ``ssh-keygen -t ed25519 -f ssh_host_key -N ""``.
-                         Defaults to ``~/.ssh/ssh_host_key``.
-        max_connections: Maximum simultaneous sessions. ``0`` = unlimited.
-        auth_function:   Optional public-key validator with signature
-                         ``(username, public_key_str) -> bool``. May be async.
-                         Pass ``None`` to allow all connections.
+        path: Path to the ``authorized_keys`` file (``~`` is expanded).
+
+    Example::
+
+        config = AppConfig(
+            app_command="python my_app.py",
+            auth=authorized_keys("~/.ssh/authorized_keys"),
+        )
+        await serve(config)
     """
-    asyncio.run(
-        serve_async(app_command, host, port, host_keys, max_connections, auth_function)
-    )
+    resolved = Path(path).expanduser()
+
+    def _auth(_username: str, public_key_str: str) -> bool:
+        try:
+            text = resolved.read_text()
+        except OSError:
+            log.warning("Could not read authorized_keys file: %s", resolved)
+            return False
+
+        # The key blob (second whitespace-separated field) is the canonical
+        # identity of the key
+        parts = public_key_str.split()
+        if len(parts) < 2:
+            return False
+        incoming_blob = parts[1]
+
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split()
+            if len(fields) >= 2 and fields[1] == incoming_blob:
+                return True
+        return False
+
+    return _auth
 
 
-__all__ = ["serve", "serve_async", "serve_config", "AppConfig"]
+__all__ = ["serve", "AppConfig", "authorized_keys"]

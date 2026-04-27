@@ -12,8 +12,9 @@ Quickstart:
     asyncio.run(serve(AppConfig(app_command="python my_app.py", port=2222)))
 """
 
+import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import asyncssh
@@ -56,7 +57,7 @@ async def serve(config: AppConfig) -> None:
             await session_manager.close_all()
 
 
-def authorized_keys(path: str | Path) -> Callable[[str, str], bool]:
+def authorized_keys(path: str | Path) -> Callable[[str, str], Awaitable[bool]]:
     """Return an auth function that allows connections whose public key appears
     in an OpenSSH ``authorized_keys`` file.
 
@@ -78,9 +79,9 @@ def authorized_keys(path: str | Path) -> Callable[[str, str], bool]:
     """
     resolved = Path(path).expanduser()
 
-    def _auth(_username: str, public_key_str: str) -> bool:
+    async def _auth(_username: str, public_key_str: str) -> bool:
         try:
-            text = resolved.read_text()
+            text = await asyncio.to_thread(resolved.read_text)
         except OSError:
             log.warning("Could not read authorized_keys file: %s", resolved)
             return False

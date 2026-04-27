@@ -1,8 +1,10 @@
 import asyncio
-from unittest.mock import MagicMock
+import inspect
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from textish import authorized_keys
 from textish.server import SessionManager, TextishSSHServerSession
 
 
@@ -82,3 +84,19 @@ async def test_connection_made_stores_connection(mock_ssh_conn, make_server):
     server = make_server()
     server.connection_made(mock_ssh_conn)
     assert server._conn is mock_ssh_conn
+
+
+@pytest.mark.asyncio
+async def test_authorized_keys_reads_file_off_event_loop(tmp_path):
+    auth_file = tmp_path / "authorized_keys"
+    auth_file.write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest user@example\n")
+    auth = authorized_keys(auth_file)
+
+    with patch("textish.asyncio.to_thread", new=AsyncMock()) as to_thread:
+        to_thread.return_value = auth_file.read_text()
+        result = auth("user", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest")
+
+        assert inspect.isawaitable(result)
+        assert await result is True
+
+    to_thread.assert_awaited_once()

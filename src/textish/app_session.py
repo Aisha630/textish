@@ -144,7 +144,8 @@ class AppSession:
             except OSError as exc:
                 # EIO is raised when the slave side of the PTY is closed,
                 # which can happen when the subprocess exits. Treat it as EOF.
-                if exc.errno == errno.EIO:
+                # EBADF can occur if the master FD is closed concurrently.
+                if exc.errno in (errno.EIO, errno.EBADF):
                     return None
                 raise
 

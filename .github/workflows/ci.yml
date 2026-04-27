@@ -5,8 +5,6 @@ on:
     paths:
       - ".github/workflows/ci.yml"
       - "**.py"
-    branches:
-      - staging
   pull_request: *filters
 
 env:

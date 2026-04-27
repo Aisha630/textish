@@ -1,6 +1,50 @@
 # CHANGELOG
 
 
+## v0.3.0 (2026-04-27)
+
+### Chores
+
+- :wrench: Remove staging branch filter from CI workflow triggers
+  ([`2b3ead6`](https://github.com/Aisha630/textish/commit/2b3ead6e680a6e817df560c713047b9728e868d3))
+
+### Continuous Integration
+
+- :construction_worker: Update OS matrix in CI workflow to include ubuntu-latest
+  ([`add93c9`](https://github.com/Aisha630/textish/commit/add93c9a04fd635feb6431381f408375ea2e7feb))
+
+### Documentation
+
+- :memo: Add a short demo to the README
+  ([`967378c`](https://github.com/Aisha630/textish/commit/967378c09dacbcf6cb0b9e56dd6d9eec06703ed9))
+
+### Features
+
+- :sparkles: Add end-to-end integration tests for textish SSH server
+  ([`b13adef`](https://github.com/Aisha630/textish/commit/b13adef1aae7f3a595ed5f44408b9edacef9fd69))
+
+- :sparkles: Refactor the architecture to use PTY-backed app subprocesses
+  ([`9742c83`](https://github.com/Aisha630/textish/commit/9742c83c56f59f680aa6a1b6cd5d89c46a3ac21c))
+
+Replace the WebDriver packet protocol bridge with raw PTY forwarding, update the async
+  AppConfig-based API, add app environment and authorized_keys support, and refresh tests/docs for
+  the new session model.
+
+serve() is now async and accepts AppConfig instead of keyword args. serve_async() and serve_config()
+  were removed. app subprocesses now run under a PTY instead of the Textual WebDriver packet
+  protocol. textish.protocol was removed. app subprocesses no longer inherit the parent environment;
+  pass variables via AppConfig.env or --env.
+
+- :sparkles: Update authorized_keys function to support async file reading and enhance error
+  handling in AppSession
+  ([`4ec6c79`](https://github.com/Aisha630/textish/commit/4ec6c79f5ab6f5339a00824e8974fee491ad10ee))
+
+### Testing
+
+- :white_check_mark: Improve cleanup verification after client disconnects in SSH server tests
+  ([`f58b372`](https://github.com/Aisha630/textish/commit/f58b3726e50f668d873ad56afd0342e2455bec79))
+
+
 ## v0.2.0 (2026-04-12)
 
 ### Bug Fixes

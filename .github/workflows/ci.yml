@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.12", "3.13", "3.14"]
     defaults:
       run:

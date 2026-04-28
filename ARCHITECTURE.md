@@ -55,7 +55,7 @@ Manages the lifecycle of one subprocess + PTY pair for one SSH client.
 2. Spawns the app command as a subprocess attached to the PTY slave, then closes the slave FD in the parent
 3. Sets non-blocking I/O on the master FD; registers it with the asyncio event loop
 4. Forwards PTY output → SSH channel in a read loop
-5. On exit (normal or cancelled): sends SIGTERM, escalates to SIGKILL after 3 s, closes the channel
+5. On exit (normal or cancelled): closes the channel, then sends SIGTERM (escalating to SIGKILL after 3 s)
 
 `send_input(data)` writes raw bytes from the SSH client to the PTY master (handles partial writes and OS errors if the subprocess has already exited).
 
@@ -101,7 +101,7 @@ TCP connect
 [DISCONNECT]
   eof_received() or connection_lost()
     → cancel run task
-    → AppSession finally: SIGTERM → [SIGKILL after 3 s] → close channel
+    → AppSession finally: close channel → SIGTERM → [SIGKILL after 3 s]
     → SessionManager removes task
     → TextishSSHServer.connection_lost() removes from active_connections
 ```

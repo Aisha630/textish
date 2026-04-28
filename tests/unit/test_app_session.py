@@ -206,13 +206,13 @@ async def test_run_terminates_subprocess_if_natural_exit_wait_times_out(
     proc.terminate.assert_called_once()
 
 
-def test_build_subprocess_env_uses_explicit_env_only(mock_channel, monkeypatch):
+def test_build_subprocess_env_inherits_parent_env(mock_channel, monkeypatch):
     monkeypatch.setenv("TEXTISH_PARENT", "parent")
     session = AppSession("cmd", mock_channel, env={"APP_ENV": "configured"})
 
     env = session._build_subprocess_env()
 
-    assert "TEXTISH_PARENT" not in env
+    assert env["TEXTISH_PARENT"] == "parent"
     assert env["APP_ENV"] == "configured"
     assert env["COLUMNS"] == "80"
     assert env["ROWS"] == "24"
@@ -232,10 +232,8 @@ def test_terminal_env_overrides_configured_env(mock_channel, monkeypatch):
 
     env = session._build_subprocess_env()
 
-    assert "TEXTISH_PARENT" not in env
-    assert env == {
-        "APP_ENV": "configured",
-        "COLUMNS": "100",
-        "ROWS": "30",
-        "TERM": "screen",
-    }
+    assert env["TEXTISH_PARENT"] == "parent"
+    assert env["APP_ENV"] == "configured"
+    assert env["COLUMNS"] == "100"
+    assert env["ROWS"] == "30"
+    assert env["TERM"] == "screen"

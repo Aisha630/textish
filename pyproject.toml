@@ -3,7 +3,7 @@ name = "textish"
 version = "0.3.0"
 description = "Serve Textual apps over SSH"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
 authors = [
     { name = "Aisha630", email = "ayeshashafique123@gmail.com" }
 ]
@@ -17,9 +17,10 @@ keywords = ["textual", "ssh", "tui", "terminal", "asyncio", "asyncssh"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Framework :: AsyncIO",
@@ -42,11 +43,11 @@ build-backend = "poetry.core.masonry.api"
 [dependency-groups]
 test = [
     "pytest>=8.0.0,<9.0.0",
-    "pytest-asyncio"
+    "pytest-asyncio>=1.0.0,<2.0.0",
 ]
 lint = [
-    "ruff>=0.11.0,<0.12.0",
     "mypy>=1.10.0,<2.0.0",
+    "ruff>=0.11.0,<0.12.0",
 ]
 dev = [
     { include-group = "test" },
@@ -56,6 +57,26 @@ dev = [
 release = [
     "python-semantic-release>=9.0.0,<10.0.0",
 ]
+
+[tool.poetry.group.test]
+optional = true
+
+[tool.poetry.group.test.dependencies]
+
+[tool.poetry.group.lint]
+optional = true
+
+[tool.poetry.group.lint.dependencies]
+
+[tool.poetry.group.dev]
+optional = true
+
+[tool.poetry.group.dev.dependencies]
+
+[tool.poetry.group.release]
+optional = true
+
+[tool.poetry.group.release.dependencies]
 
 [tool.poetry]
 packages = [

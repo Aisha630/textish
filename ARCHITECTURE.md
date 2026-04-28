@@ -1,6 +1,6 @@
 # Architecture
 
-textish serves [Textual](https://textual.textualize.io/) TUI applications over SSH. Each SSH connection gets its own isolated subprocess running the configured app, bridged via a pseudo-terminal (PTY).
+textish serves [Textual](https://textual.textualize.io/) TUI applications over SSH. Each SSH connection gets its own isolated subprocess running the configured app, bridged via a pseudo-terminal (PTY).Syntax error in graph
 
 ## Directory Structure
 
@@ -36,6 +36,7 @@ Three classes:
 **`TextishSSHServer`** handles one TCP connection. It enforces `max_connections`, advertises public-key auth if an auth callback is configured, and creates `(channel, session)` pairs for incoming shell requests.
 
 **`TextishSSHServerSession`** handles one SSH shell session. It bridges asyncssh protocol events to `AppSession`:
+
 - `pty_requested` — stores terminal dimensions, approves the PTY
 - `session_started` — creates the `AppSession`, starts `AppSession.run()`, starts the input consumer task
 - `data_received` — enqueues raw bytes into `_input_queue`
@@ -51,6 +52,7 @@ Manages the lifecycle of one subprocess + PTY pair for one SSH client.
 **State machine:** `PENDING → RUNNING → STOPPING → STOPPED`
 
 `run()` is the main coroutine:
+
 1. Opens a PTY master/slave pair via `pty.openpty()`
 2. Spawns the app command as a subprocess attached to the PTY slave, then closes the slave FD in the parent
 3. Sets non-blocking I/O on the master FD; registers it with the asyncio event loop
@@ -142,15 +144,15 @@ The alternative would be to run Textual app instances in-process and redirect th
 
 ## Technology Stack
 
-| Layer | Library | Version |
-|---|---|---|
-| SSH server | asyncssh | ≥2.22, <3 |
-| TUI framework | textual | ≥0.58, <1 |
-| Async runtime | asyncio (stdlib) | — |
-| Language | Python | ≥3.12 |
-| Linting | ruff | — |
-| Type checking | mypy (strict) | — |
-| Testing | pytest + pytest-asyncio | — |
+| Layer         | Library                 | Version    |
+| ------------- | ----------------------- | ---------- |
+| SSH server    | asyncssh                | ≥2.22, <3 |
+| TUI framework | textual                 | ≥0.58, <1 |
+| Async runtime | asyncio (stdlib)        | —         |
+| Language      | Python                  | ≥3.12     |
+| Linting       | ruff                    | —         |
+| Type checking | mypy (strict)           | —         |
+| Testing       | pytest + pytest-asyncio | —         |
 
 ## Limitations
 

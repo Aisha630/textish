@@ -117,7 +117,8 @@ class AppSession:
 
     def _build_subprocess_env(self) -> dict[str, str]:
         """Build the environment for the app subprocess."""
-        env = dict(self._env)
+        env = dict(os.environ)
+        env.update(self._env)
         env.update(
             {
                 "COLUMNS": str(self._cols),

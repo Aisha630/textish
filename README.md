@@ -28,6 +28,8 @@ Each SSH connection spawns the Textual app as a fresh subprocess attached to a s
 
 This is the same basic idea as [wish](https://github.com/charmbracelet/wish) (Charmbracelet's SSH app framework for Go) and [inkish](https://github.com/Textualize/inkish), adapted for Python, asyncssh, and Textual apps.
 
+For a deeper dive into the component design and data flow, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ---
 
 ## Installation

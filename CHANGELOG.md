@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.4.0 (2026-04-28)
+
+### Bug Fixes
+
+- :bug: Update CI configuration to install test and lint dependencies; modify test case to ensure
+  environment variables inherit correctly
+  ([`597d006`](https://github.com/Aisha630/textish/commit/597d006fe55607b037566e755c7a6ff8375cdfa6))
+
+- :bug: Update subprocess environment handling in AppSession to include system environment variables
+  ([`30dc626`](https://github.com/Aisha630/textish/commit/30dc626aaeb39861c055a15341a9925c1cdfb1ba))
+
+### Documentation
+
+- :book: Add ARCHITECTURE.md for detailed component design and data flow
+  ([`816f393`](https://github.com/Aisha630/textish/commit/816f393c4d7644503e84fb4643c7b303587019b2))
+
+- :book: Clarify exit sequence in AppSession lifecycle management
+  ([`1231d74`](https://github.com/Aisha630/textish/commit/1231d74791a21eff1471585a6ec5b154caa89af5))
+
+### Features
+
+- :sparkles: Integrate uvloop for improved asyncio performance in CLI
+  ([`8d435df`](https://github.com/Aisha630/textish/commit/8d435dfcdf5bd1fdd57932569c66c1371a9e8106))
+
+
 ## v0.3.0 (2026-04-27)
 
 ### Chores

@@ -8,6 +8,8 @@ import asyncio
 import logging
 import sys
 
+import uvloop
+
 from . import authorized_keys, serve
 from .config import AppConfig
 
@@ -111,7 +113,7 @@ def main() -> None:
     )
 
     try:
-        asyncio.run(serve(config))
+        asyncio.run(serve(config), loop_factory=uvloop.new_event_loop)
     except OSError as e:
         sys.exit(f"Error: {e}")
     except KeyboardInterrupt:

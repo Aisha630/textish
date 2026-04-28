@@ -11,6 +11,7 @@ requires-python = ">=3.12,<4.0"
 dependencies = [
     "asyncssh>=2.22.0,<3.0.0",
     "textual>=0.58.0,<1.0.0",
+    "uvloop>=0.21.0",
 ]
 keywords = ["textual", "ssh", "tui", "terminal", "asyncio", "asyncssh"]
 classifiers = [

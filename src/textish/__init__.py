@@ -96,6 +96,7 @@ def serve(
     host_key_path: str | None = None,
     max_connections: int = 0,
     auth: Callable[[str, str], bool | Awaitable[bool]] | None = None,
+    log_level: int | str | None = "INFO",
 ) -> None:
     """Serve a Textual app over SSH. Blocks until interrupted.
 
@@ -108,6 +109,10 @@ def serve(
              and generated on first run.
         max_connections: ``0`` means unlimited.
         auth: Optional public-key auth callback (see :func:`authorized_keys`).
+        log_level: If set (default ``"INFO"``) and logging is not already
+             configured, install a basic stderr log handler at this level so the
+             server prints connection and lifecycle logs. Pass ``None`` to leave
+             logging untouched and configure it yourself.
 
     Example::
 
@@ -115,6 +120,13 @@ def serve(
         from myapp import MyApp
         serve(MyApp, port=2222)
     """
+    if log_level is not None and not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=log_level,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
     config = AppConfig(
         app_ref=_resolve_app(app),
         host=host,

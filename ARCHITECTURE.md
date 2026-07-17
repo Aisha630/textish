@@ -1,122 +1,129 @@
 # Architecture
 
-textish serves [Textual](https://textual.textualize.io/) TUI applications over SSH. Each SSH connection runs the configured app in its own **subinterpreter** (Python 3.14+), bridged to the SSH channel over cross-interpreter queues. One server process hosts many apps at once, with per-session module isolation and, thanks to the per-interpreter GIL, real multi-core parallelism.
+textish serves independent Textual app instances over SSH from one Python process. Every interactive SSH session gets its own app object and `SSHDriver`; imported modules and the asyncio event loop are shared.
 
-## Directory Structure
+## Directory structure
 
 ```
 textish/
 ├── src/textish/
-│   ├── __init__.py       # Public API: serve()/serve_async(), AppConfig, authorized_keys()
-│   ├── server.py         # SSH server layer (TextishSSHServer, session, SessionManager)
-│   ├── config.py         # AppConfig dataclass with validation
-│   ├── cli.py            # CLI entry point
-│   └── subinterp/
-│       ├── session.py    # SubinterpAppSession — main-interpreter side
-│       ├── _worker.py    # QueueDriver + run_app — runs inside the subinterpreter
-│       └── _demo_app.py  # Small apps for the example, tests, and benchmark
+│   ├── __init__.py           # Public API, server startup, auth and host keys
+│   ├── config.py             # Validated AppConfig
+│   ├── cli.py                # CLI entry point
+│   ├── server.py             # AsyncSSH sessions, limits and lifecycle
+│   └── inprocess/
+│       ├── __init__.py
+│       ├── driver.py         # SSHDriver: terminal bytes ↔ Textual events
+│       └── session.py        # One app instance's lifecycle
 ├── tests/
-│   ├── unit/             # Mocked unit tests for the server layer
-│   └── integration/      # Real SSH server + client end-to-end tests (3.14+)
+│   ├── unit/
+│   └── integration/          # Real AsyncSSH client/server tests
 ├── examples/
-│   ├── app.py            # Demo Wordle app (Textual)
-│   └── main.py           # Minimal serve() usage
 └── benchmarks/
-    └── bench_subinterp.py  # Per-session memory and render-time benchmark
+    ├── bench_app.py
+    ├── bench_shared.py       # Synthetic in-process session benchmark
+    └── bench_ssh.py          # Real encrypted SSH connection benchmark
 ```
 
-## Component Overview
+## Components
 
-### `__init__.py` — Public API
+### Public API
 
-`serve(app, *, host, port, ...)` is the friendly, blocking entry point. It accepts a Textual `App` subclass, a zero-argument factory, or a `"module:attr"` string; derives the `module:qualname` import ref (rejecting apps defined in `__main__`, which a subinterpreter cannot import); forwards the running script's directory and cwd as `import_paths` so a local app is importable in the subinterpreter; generates a host key if needed; and runs the server (with uvloop if installed). `serve_async(config)` is the async entry for embedding in an existing event loop. `authorized_keys(path)` returns an auth callback backed by an OpenSSH `authorized_keys` file.
+`serve(app, ...)` accepts an `App` subclass, any zero-argument factory, or a `"module:attr"` reference. Direct factories do not need to be importable because they stay in the server interpreter. `serve_async(AppConfig(...))` supports both `app_factory` and `app_ref` for embedding in an existing event loop.
 
-### `config.py` — AppConfig
+Server startup generates a stable Ed25519 host key with mode `0600` when needed. It defaults to localhost and warns if an unauthenticated server binds to a non-loopback address. Optional uvloop and coloured logging support are extras.
 
-Dataclass validated at construction. Holds host, port, `app_ref` (the app import path `package.module:attr`), host key path, connection limit, an optional auth callback, and `import_paths` (extra `sys.path` entries for the subinterpreter). Validation rejects an empty or malformed `app_ref` and a missing host key file.
+### `SessionManager`
 
-### `server.py` — SSH Server Layer
+The manager owns two process-wide controls:
 
-**`SessionManager`** tracks all in-flight `SubinterpAppSession.run()` tasks. On shutdown it cancels them, so no subinterpreters are left running.
+- A session reservation count enforces `max_connections` across SSH channels, including multiple channels opened through one TCP connection.
+- A four-slot startup gate prevents a connection burst from continuously scheduling hundreds of expensive Textual startup paths ahead of existing sessions. A slot is released when an app reaches Textual's ready state.
 
-**`TextishSSHServer`** handles one TCP connection: enforces `max_connections`, advertises public-key auth when an auth callback is configured, and creates a raw-bytes channel (`encoding=None`) plus a session for each shell request.
+It also observes every app task, logs failures, and cancels all remaining tasks during server shutdown.
 
-**`TextishSSHServerSession`** bridges asyncssh protocol events to a `SubinterpAppSession`:
+### `TextishSSHServerSession`
 
-- `pty_requested` — stores terminal dimensions, approves the PTY.
-- `session_started` — rejects non-PTY connections; otherwise creates the `SubinterpAppSession`, starts its run task, and starts the input consumer.
-- `data_received` — enqueues raw bytes (a single consumer coroutine forwards them in FIFO order).
-- `terminal_size_changed` — calls `SubinterpAppSession.resize()`.
-- `eof_received` / `connection_lost` — cancel the run task, which tears down the subinterpreter.
+One instance represents one SSH shell channel. It:
 
-### `subinterp/session.py` — SubinterpAppSession (main interpreter)
+- requires a PTY and records terminal dimensions;
+- creates one `InProcessAppSession` after the shell starts;
+- forwards input and resize callbacks synchronously in event-loop order;
+- resets the optional idle timeout on client activity;
+- limits AsyncSSH's channel output buffer to 256 KiB and disconnects a slow reader if the high-water callback fires; and
+- cancels only its own app task on EOF or disconnect.
 
-Creates two cross-interpreter queues and a subinterpreter, then runs the worker on its own OS thread via `Interpreter.call_in_thread`. It pumps the outbound queue to the SSH channel and forwards input, resize, and exit messages onto the inbound queue. On teardown it closes the channel, signals the worker to exit, joins the thread, and closes the interpreter. `SUBINTERP_AVAILABLE` reports whether the runtime is 3.14+.
+### `InProcessAppSession`
 
-### `subinterp/_worker.py` — QueueDriver + run_app (subinterpreter)
+The session calls the configured factory to create a fresh `App`, binds its
+driver, and awaits `app.run_async()`. Input arriving during startup is bounded
+to 64 KiB and drained after the driver enters application mode. Terminal resizes
+received during startup are applied when the driver becomes ready. Exceptions
+are logged and reported briefly to the SSH client.
 
-Runs inside each subinterpreter and stays pure Python — it must not import asyncssh, uvloop, or cryptography (those live in the main interpreter).
+Textual normally redirects process-global `sys.stdout` and `sys.stderr` for the lifetime of an app. That is unsafe when app lifetimes overlap, so server mode disables those global swaps. `print()` output remains attached to the server process; applications should use logging for diagnostics.
 
-**`QueueDriver`** is a `textual.driver.Driver` that replaces the terminal assumptions: `write` puts `("D", bytes)` on the outbound queue; input bytes are fed in, decoded, parsed by Textual's `XTermParser`, and posted to the app as events; resize is an explicit call; lifecycle emits the alternate-screen / mouse / cursor sequences.
+### `SSHDriver`
 
-**`run_app`** is the subinterpreter entry point: it imports the app from `app_ref`, assigns `app.driver_class` to a queue-bound driver, runs `app.run_async(size=...)`, and runs an input-pump task that drains the inbound queue.
+`SSHDriver` replaces Textual's terminal driver assumptions:
 
-## Data Flow
+- `write()` encodes terminal output and writes directly to one AsyncSSH channel;
+- `feed()` incrementally decodes one client's bytes and passes parsed events to Textual;
+- `resize()` posts a Textual resize message; and
+- application-mode lifecycle methods manage alternate-screen, mouse, cursor, and bracketed-paste escape sequences.
 
-### Connection lifecycle
+There are no per-session threads, subprocesses, polling loops, or serialization queues.
+The binding uses one shared driver class rather than creating a new Python type
+for every connection, and the compact pre-start input buffer grows only when
+bytes arrive.
+
+## Data flow
 
 ```
-TCP connect
-  → TextishSSHServer.connection_made()   [enforce limit]
-  → pty_requested()                       [store dimensions]
-  → session_requested()                   [raw-bytes channel + session]
-  → session_started()
-      → create SubinterpAppSession
-      → run task  →  registered with SessionManager
-      → input consumer task
+TCP connection
+  → SSH session_requested()  [reserve global session slot]
+  → PTY + shell requested
+  → create app instance and run task  [startup gate]
 
-[RUNNING]
-  main interpreter                         subinterpreter (own thread + GIL)
-  keystrokes → data_received → in_queue ─► input pump → QueueDriver.feed → app
-  channel.write ◄─ out pump ◄─ out_queue ◄─ QueueDriver.write ◄─ app render
+client bytes → data_received → SSHDriver.feed → this App instance
+client resize → terminal_size_changed → SSHDriver.resize → this App instance
+App render → SSHDriver.write → AsyncSSH channel → client
 
-[RESIZE]  terminal_size_changed → in_queue ("R") → QueueDriver.resize
-[DISCONNECT] eof/connection_lost → cancel run task → SubinterpAppSession
-             teardown: close channel, ("X") to worker, join thread, close interp
+EOF/disconnect → cancel app task → Textual driver cleanup → close channel
 ```
 
-## Key Design Decisions
+## Scaling model
 
-**Subinterpreter per connection.** Each session gets its own module state and, on 3.14+, its own GIL. Sessions therefore render in parallel across cores, and a Python-level failure in one is far less likely to disturb another. This is much cheaper than a subprocess (a few MB vs tens of MB) while giving stronger isolation than running every app in one shared interpreter.
+Sharing imported modules keeps the baseline per-session overhead low. The
+included synthetic benchmark measured roughly 430–440 KB per small app session on
+one macOS/Python 3.14 machine, but widget trees, render caches, terminal size,
+and application state can change that substantially.
 
-**C libraries stay in the main interpreter.** asyncssh and cryptography are not guaranteed subinterpreter-safe, so only the pure-Python Textual app and the driver run in the subinterpreter. Bytes cross the boundary through queues.
+The real-SSH benchmark measured about 464 KB of server memory per connection at
+1,000 concurrent encrypted localhost connections on the same machine. This
+includes AsyncSSH connection and channel state but not the separate client load
+generator.
 
-**Bytes over queues, not shared objects.** Subinterpreters do not share arbitrary Python objects, so the SSH channel cannot be handed across. The driver serialises output to `("D", bytes)` messages; a main-interpreter pump forwards them to the channel. This adds one small copy per I/O.
+The trade-off is cooperative scheduling. All apps share one event loop and GIL:
 
-**PTY required.** Textual relies on a real terminal to render. Non-PTY connections are rejected early with a clear message.
+- async I/O scales well when handlers yield promptly;
+- blocking I/O should use async libraries, Textual workers, or `asyncio.to_thread()`;
+- CPU-heavy work should use a process pool or external service; and
+- mutable module globals must not be used as unkeyed per-user state.
 
-**FIFO input queue.** Client keystrokes are drained by a single consumer before being forwarded, so bytes reach the app in arrival order without locks.
+A Python exception in one app task is contained and closes that session, but a process-level failure affects everyone.
 
-**Graceful shutdown.** `SessionManager` cancels every run task before the server exits; each `SubinterpAppSession` tears down its subinterpreter in a `finally` block.
+## Compression
 
-## Security
+AsyncSSH's default algorithm list already offers delayed `zlib@openssh.com`; clients can negotiate it with `ssh -C`. Compression is not forced because it trades bandwidth for CPU time and per-connection compressor state. This should be benchmarked against the deployment's actual terminal output and network conditions.
 
-Subinterpreters are an isolation and parallelism feature, not a security boundary. The CPython documentation states they must not be used in security-sensitive situations: a malicious C extension can cross interpreters, and a hard crash still ends the whole process. Serve only trusted apps; sandbox untrusted code at the OS level (separate low-privilege user, cgroup limits, seccomp or landlock) instead.
+## Security responsibilities
 
-## Technology Stack
+textish is responsible for SSH authentication hooks, private host-key handling, transport limits, idle cleanup, and slow-client backpressure. Served applications are responsible for domain authorization and validating user-controlled values. Application code itself must be trusted because all sessions share the process.
 
-| Layer         | Library                 | Version    |
-| ------------- | ----------------------- | ---------- |
-| SSH server    | asyncssh                | ≥2.24, <3 |
-| TUI framework | textual                 | ≥8.2, <9  |
-| Isolation     | concurrent.interpreters | stdlib (3.14+) |
-| Async runtime | asyncio / uvloop        | —         |
-| Language      | Python                  | ≥3.14     |
+## Supported platform
 
-## Limitations
-
-- **Python 3.14+ only** — the backend depends on `concurrent.interpreters`.
-- **Unix only** — targets POSIX; Windows is not supported.
-- **App must be importable** — referenced by `module:attr`, not a shell command.
-- **Shared process** — a whole-process fault affects all sessions.
-- **Subinterpreter-safe apps only** — the app and its dependencies must run under multiple interpreters (Textual and its tree are pure Python).
+- Python 3.12+
+- Linux and macOS
+- AsyncSSH ≥2.24, <3
+- Textual ≥8.2, <9

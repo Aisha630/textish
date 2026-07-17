@@ -6,9 +6,8 @@ Run it (from the repo root or from this directory)::
     # then, from another terminal:
     ssh -p 2222 localhost
 
-``serve`` generates a host key on first run and manages everything else. The app
-is imported from ``examples/app.py``; it must live in an importable module (not
-inline here), because each connection re-imports it in its own subinterpreter.
+``serve`` generates a host key on first run and manages everything else. Each
+SSH session receives a fresh ``WordleApp`` instance in the shared interpreter.
 Connect with a real terminal (a PTY is required).
 """
 

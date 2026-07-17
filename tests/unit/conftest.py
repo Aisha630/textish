@@ -31,7 +31,6 @@ def make_server():
         return TextishSSHServer(
             app_ref,
             max_connections=max_connections,
-            active_connections=set(),
             session_manager=SessionManager(),
             auth_function=auth_function,
         )

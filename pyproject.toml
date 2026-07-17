@@ -7,18 +7,18 @@ license = "MIT"
 authors = [
     { name = "Aisha630", email = "ayeshashafique123@gmail.com" }
 ]
-requires-python = ">=3.14,<4.0"
+requires-python = ">=3.12,<4.0"
 dependencies = [
     "asyncssh>=2.24.0,<3.0.0",
     "textual>=8.2.0,<9.0.0",
-    "uvloop>=0.22.0",
-    "colorlog>=6.9.0,<7.0.0",
 ]
 keywords = ["textual", "ssh", "tui", "terminal", "asyncio", "asyncssh"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
@@ -26,6 +26,10 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Topic :: Terminals",
 ]
+
+[project.optional-dependencies]
+color = ["colorlog>=6.9.0,<7.0.0"]
+performance = ["uvloop>=0.22.0,<1.0.0"]
 
 [project.scripts]
 textish = "textish.cli:main"
@@ -46,7 +50,7 @@ test = [
 ]
 lint = [
     "mypy>=1.10.0,<2.0.0",
-    "ruff>=0.11.0,<0.12.0",
+    "ruff>=0.15.10,<0.16.0",
 ]
 dev = [
     { include-group = "test" },
@@ -60,22 +64,14 @@ release = [
 [tool.poetry.group.test]
 optional = true
 
-[tool.poetry.group.test.dependencies]
-
 [tool.poetry.group.lint]
 optional = true
-
-[tool.poetry.group.lint.dependencies]
 
 [tool.poetry.group.dev]
 optional = true
 
-[tool.poetry.group.dev.dependencies]
-
 [tool.poetry.group.release]
 optional = true
-
-[tool.poetry.group.release.dependencies]
 
 [tool.poetry]
 packages = [
@@ -84,14 +80,14 @@ packages = [
 
 [tool.ruff]
 line-length = 88
-target-version = "py314"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-build_command = "pip install poetry && poetry build"
+build_command = "pip install poetry==2.4.1 && poetry build"
 
 [tool.semantic_release.branches.main]
 match = "main"
@@ -103,7 +99,7 @@ upload_to_vcs_release = true
 
 [tool.mypy]
 files = ["src/textish"]
-python_version = "3.14"
+python_version = "3.12"
 strict = true
 
 [tool.pytest.ini_options]

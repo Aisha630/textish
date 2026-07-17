@@ -2,10 +2,11 @@ import asyncio
 import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncssh
 import pytest
 
 from textish import authorized_keys
-from textish.server import SessionManager, TextishSSHServerSession
+from textish.server import SessionManager, TextishSSHServer, TextishSSHServerSession
 
 
 @pytest.mark.asyncio
@@ -37,7 +38,7 @@ async def test_terminal_size_changed_calls_resize():
     session = TextishSSHServerSession("pkg.mod:App", SessionManager())
     calls = []
 
-    async def fake_resize(cols, rows):
+    def fake_resize(cols, rows):
         calls.append((cols, rows))
 
     mock_app_session = MagicMock()
@@ -45,7 +46,6 @@ async def test_terminal_size_changed_calls_resize():
     session._app_session = mock_app_session
 
     session.terminal_size_changed(120, 40, 0, 0)
-    await asyncio.sleep(0)  # let the event loop run the resize task
     assert calls == [(120, 40)]
 
 
@@ -62,7 +62,7 @@ async def test_session_requested_returns_channel_and_correct_session_type(
 
     assert channel is mock_channel
     assert isinstance(session, TextishSSHServerSession)
-    assert session._app_ref == "pkg.mod:App"
+    assert session._app_source == "pkg.mod:App"
     mock_ssh_conn.create_server_channel.assert_called_once_with(encoding=None)
 
 
@@ -75,7 +75,7 @@ async def test_session_requested_forwards_app_ref(mock_ssh_conn, make_server):
 
     _channel, session = server.session_requested()
 
-    assert session._app_ref == "my_pkg.my_mod:MyApp"
+    assert session._app_source == "my_pkg.my_mod:MyApp"
 
 
 @pytest.mark.asyncio
@@ -87,15 +87,86 @@ async def test_connection_made_stores_connection(mock_ssh_conn, make_server):
 
 @pytest.mark.asyncio
 async def test_authorized_keys_reads_file_off_event_loop(tmp_path):
+    key = asyncssh.generate_private_key("ssh-ed25519")
+    public_key = key.export_public_key().decode().strip()
     auth_file = tmp_path / "authorized_keys"
-    auth_file.write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest user@example\n")
+    auth_file.write_text(f"{public_key} user@example\n")
     auth = authorized_keys(auth_file)
 
     with patch("textish.asyncio.to_thread", new=AsyncMock()) as to_thread:
         to_thread.return_value = auth_file.read_text()
-        result = auth("user", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest")
+        result = auth("user", public_key)
 
         assert inspect.isawaitable(result)
         assert await result is True
 
     to_thread.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_authorized_keys_accepts_restrict_option(tmp_path):
+    key = asyncssh.generate_private_key("ssh-ed25519")
+    public_key = key.export_public_key().decode().strip()
+    auth_file = tmp_path / "authorized_keys"
+    auth_file.write_text(f"restrict {public_key} user@example\n")
+
+    assert await authorized_keys(auth_file)("user", public_key) is True
+
+
+def test_session_limit_counts_channels_not_connections(mock_ssh_conn):
+    manager = SessionManager()
+    server = TextishSSHServer("pkg.mod:App", max_connections=1, session_manager=manager)
+    server.connection_made(mock_ssh_conn)
+
+    assert server.session_requested() is not False
+    assert server.session_requested() is False
+    assert manager.active_sessions == 1
+
+
+def test_rejected_non_pty_session_releases_limit(mock_channel):
+    manager = SessionManager()
+    assert manager.try_acquire(1)
+    session = TextishSSHServerSession("pkg.mod:App", manager)
+    session._channel = mock_channel
+
+    session.session_started()
+
+    assert manager.active_sessions == 0
+
+
+@pytest.mark.asyncio
+async def test_idle_timeout_closes_channel(mock_channel):
+    session = TextishSSHServerSession(
+        "pkg.mod:App", SessionManager(), idle_timeout=0.01
+    )
+    session.connection_made(mock_channel)
+
+    await asyncio.sleep(0.02)
+
+    mock_channel.close.assert_called_once()
+
+
+def test_pause_writing_closes_slow_client(mock_channel):
+    session = TextishSSHServerSession("pkg.mod:App", SessionManager())
+    session.connection_made(mock_channel)
+
+    session.pause_writing()
+
+    mock_channel.close.assert_called_once()
+
+
+def test_eof_closes_immediately_when_no_app_is_running():
+    session = TextishSSHServerSession("pkg.mod:App", SessionManager())
+
+    assert session.eof_received() is False
+
+
+@pytest.mark.asyncio
+async def test_eof_keeps_output_open_for_terminal_cleanup():
+    session = TextishSSHServerSession("pkg.mod:App", SessionManager())
+    session._run_task = asyncio.create_task(asyncio.sleep(60))
+
+    assert session.eof_received() is True
+    await asyncio.sleep(0)
+
+    assert session._run_task.cancelled()

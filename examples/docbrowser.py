@@ -60,7 +60,7 @@ DOCS: list[tuple[str, str]] = [
     (
         "Concurrency",
         "Serving many sessions at once.",
-        ["Isolation", "Subinterpreters", "Parallel rendering", "Limits"],
+        ["App instances", "Shared event loop", "Backpressure", "Limits"],
     ),
     (
         "Deployment",

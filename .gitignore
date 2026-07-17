@@ -3,6 +3,10 @@
 venv/
 .env
 
+# locally generated SSH host keys
+ssh_host_key
+textish_host_key
+
 # editors
 .vscode/
 **/settings.json

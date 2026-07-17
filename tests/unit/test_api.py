@@ -1,44 +1,70 @@
+import stat
+from unittest.mock import patch
+
 import pytest
 
-from textish import _resolve_app
+from textish import _ensure_host_key, serve
+from textish.config import AppConfig
 
 
-class _FakeApp:
-    """Stands in for a Textual App class defined in an importable module."""
+def test_serve_accepts_local_factory_in_shared_interpreter():
+    def factory():
+        return object()
+
+    with patch("textish._run_server") as run_server:
+        serve(factory, log_level=None)
+
+    config = run_server.call_args.args[0]
+    assert config.app_factory is factory
+    assert config.app_ref == ""
 
 
-# Give it a stable module path as if imported from a real module.
-_FakeApp.__module__ = "my_pkg.my_mod"
-_FakeApp.__qualname__ = "MyApp"
-
-
-def test_resolve_app_from_class():
-    assert _resolve_app(_FakeApp) == "my_pkg.my_mod:MyApp"
-
-
-def test_resolve_app_from_string_passthrough():
-    assert _resolve_app("pkg.mod:App") == "pkg.mod:App"
-
-
-def test_resolve_app_from_factory():
-    def make():
-        return _FakeApp()
-
-    make.__module__ = "my_pkg.my_mod"
-    make.__qualname__ = "make"
-    assert _resolve_app(make) == "my_pkg.my_mod:make"
-
-
-def test_resolve_app_rejects_main_module():
-    class Local:
-        pass
-
-    Local.__module__ = "__main__"
-    Local.__qualname__ = "Local"
-    with pytest.raises(ValueError, match="importable module"):
-        _resolve_app(Local)
-
-
-def test_resolve_app_rejects_non_app_object():
+def test_serve_rejects_non_callable_object():
     with pytest.raises(TypeError):
-        _resolve_app(object())
+        serve(object(), log_level=None)
+
+
+def test_app_config_defaults_to_localhost_and_allows_missing_key(tmp_path):
+    config = AppConfig(app_ref="pkg.mod:App", host_key_path=str(tmp_path / "missing"))
+
+    assert config.host == "127.0.0.1"
+    assert config.host_key_path == str(tmp_path / "missing")
+
+
+def test_app_config_accepts_direct_factory():
+    def factory():
+        return object()
+
+    config = AppConfig(app_factory=factory)
+
+    assert config.app_factory is factory
+
+
+def test_app_config_rejects_ref_and_factory_together():
+    with pytest.raises(ValueError, match="not both"):
+        AppConfig(app_ref="pkg:App", app_factory=lambda: object())
+
+
+@pytest.mark.parametrize("app_ref", ["", "module", ":App", "module:", "m:a:b"])
+def test_app_config_rejects_malformed_reference(app_ref, tmp_path):
+    with pytest.raises(ValueError, match="app_ref"):
+        AppConfig(app_ref=app_ref, host_key_path=str(tmp_path / "key"))
+
+
+def test_generated_host_key_has_private_permissions(tmp_path):
+    path = tmp_path / "keys" / "host_key"
+
+    result = _ensure_host_key(str(path))
+
+    assert result == str(path)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_app_config_rejects_negative_idle_timeout():
+    with pytest.raises(ValueError, match="idle_timeout"):
+        AppConfig(app_ref="pkg:App", idle_timeout=-1)
+
+
+def test_app_config_rejects_non_callable_auth():
+    with pytest.raises(TypeError, match="auth"):
+        AppConfig(app_ref="pkg:App", auth="invalid")  # type: ignore[arg-type]

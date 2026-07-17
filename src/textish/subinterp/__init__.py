@@ -11,6 +11,22 @@ Requires Python 3.14+.
 See :class:`~textish.subinterp.session.SubinterpAppSession`.
 """
 
-from textish.subinterp.session import SUBINTERP_AVAILABLE, SubinterpAppSession
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from textish.subinterp.session import SubinterpAppSession
 
 __all__ = ["SubinterpAppSession", "SUBINTERP_AVAILABLE"]
+
+
+def __getattr__(name: str) -> Any:
+    # Imported lazily so that importing ``textish.subinterp`` (which happens when
+    # the subinterpreter loads ``textish.subinterp._worker``) does NOT import
+    # ``session``, which imports asyncssh. asyncssh's cryptography dependency
+    # cannot load in a subinterpreter. The worker only needs ``_worker``, not
+    # ``session``. See tests/unit/test_import_safety.py.
+    if name in ("SubinterpAppSession", "SUBINTERP_AVAILABLE"):
+        from textish.subinterp import session
+
+        return getattr(session, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

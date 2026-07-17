@@ -23,10 +23,14 @@ import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-import asyncssh
-
 from .config import AppConfig
-from .server import SessionManager, TextishSSHServer
+
+# NOTE: asyncssh (and its cryptography/Rust dependency) is imported lazily inside
+# the functions below, never at module top level. Importing ``textish`` must stay
+# free of asyncssh so the subinterpreter worker — which imports
+# ``textish.subinterp._worker`` and therefore runs this package's ``__init__`` —
+# does not drag in cryptography, whose Rust bindings cannot load in a
+# subinterpreter. See tests/unit/test_import_safety.py.
 
 log = logging.getLogger("textish")
 
@@ -74,6 +78,8 @@ def _default_import_paths() -> tuple[str, ...]:
 
 def _ensure_host_key(host_key_path: str | None) -> str:
     """Return a host key path, generating an ed25519 key if none exists."""
+    import asyncssh
+
     path = Path(host_key_path).expanduser() if host_key_path else Path("ssh_host_key")
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,6 +140,10 @@ async def serve_async(config: AppConfig) -> None:
     Use this when embedding textish in an existing asyncio program; most callers
     want the simpler blocking :func:`serve` instead.
     """
+    import asyncssh
+
+    from .server import SessionManager, TextishSSHServer
+
     # Track connections for graceful shutdown and max_connections enforcement.
     active_connections: set[asyncssh.SSHServerConnection] = set()
     session_manager = SessionManager()

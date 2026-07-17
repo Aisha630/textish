@@ -85,7 +85,7 @@ class SubinterpAppSession:
         The channel is always closed and the subinterpreter torn down in the
         ``finally`` block.
         """
-        from concurrent.interpreters import QueueEmptyError
+        import queue  # cross-interpreter Queue raises stdlib queue.Empty subclasses
 
         self._in_q = _interpreters.create_queue()
         self._out_q = _interpreters.create_queue()
@@ -101,7 +101,7 @@ class SubinterpAppSession:
             while True:
                 try:
                     msg = self._out_q.get_nowait()
-                except QueueEmptyError:
+                except queue.Empty:
                     if not self._thread.is_alive():
                         break
                     await asyncio.sleep(_POLL)

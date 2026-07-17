@@ -161,7 +161,7 @@ async def _amain(
 ) -> None:
     import asyncio
     import importlib
-    from concurrent.interpreters import QueueEmptyError
+    import queue  # cross-interpreter Queue raises stdlib queue.Empty subclasses
 
     module_name, _, attr = app_ref.partition(":")
     factory = getattr(importlib.import_module(module_name), attr)
@@ -180,7 +180,7 @@ async def _amain(
         while not stop.is_set():
             try:
                 msg = in_queue.get_nowait()
-            except QueueEmptyError:
+            except queue.Empty:
                 await asyncio.sleep(0.005)
                 continue
             tag = msg[0]

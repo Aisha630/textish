@@ -71,7 +71,13 @@ async def _bench(n: int) -> dict:
 
     baseline = _rss_mb()
     channels = [_FakeChannel() for _ in range(n)]
-    sessions = [SubinterpAppSession(APP_REF, c, 80, 24) for c in channels]
+    # Forward this checkout's src dir so the subinterpreter can import textish
+    # even when the package is not pip-installed.
+    import_paths = (os.path.abspath(_SRC),) if os.path.isdir(_SRC) else ()
+    sessions = [
+        SubinterpAppSession(APP_REF, c, 80, 24, import_paths=import_paths)
+        for c in channels
+    ]
     t0 = time.perf_counter()
     tasks = [asyncio.create_task(s.run()) for s in sessions]
     await _await_all_rendered(channels, timeout=120)

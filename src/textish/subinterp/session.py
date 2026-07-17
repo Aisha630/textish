@@ -85,14 +85,25 @@ class SubinterpAppSession:
         The channel is always closed and the subinterpreter torn down in the
         ``finally`` block.
         """
+        import sys
         from concurrent.interpreters import QueueEmptyError
 
         self._in_q = _interpreters.create_queue()
         self._out_q = _interpreters.create_queue()
         self._interp = _interpreters.create()
+        # A fresh subinterpreter starts with its own sys.path that omits the
+        # parent's script directory and any runtime additions, so propagate the
+        # parent's sys.path to keep the app importable inside the subinterpreter.
+        sys_path = list(sys.path)
         # call_in_thread runs run_app in the subinterpreter on a new OS thread.
         self._thread = self._interp.call_in_thread(
-            run_app, self._app_ref, self._in_q, self._out_q, self._cols, self._rows
+            run_app,
+            self._app_ref,
+            self._in_q,
+            self._out_q,
+            self._cols,
+            self._rows,
+            sys_path,
         )
 
         try:

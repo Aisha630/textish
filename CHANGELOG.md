@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.5.0 (2026-07-17)
+
+### Features
+
+- Replace subinterpreters with lightweight shared sessions
+  ([`040de0f`](https://github.com/Aisha630/textish/commit/040de0ffd6d1b0ddf01090597fcf84edd4f0d539))
+
+
 ## v0.4.0 (2026-04-28)
 
 ### Bug Fixes

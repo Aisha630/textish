@@ -5,15 +5,16 @@ on:
     paths:
       - ".github/workflows/ci.yml"
       - "**.py"
+      - "pyproject.toml"
+      - "poetry.lock"
+      - ".pre-commit-config.yaml"
   pull_request: *filters
 
 env:
   PYTEST_ADDOPTS: "--color=yes"
 
 jobs:
-  # These three jobs produce the required status checks that branch protection
-  # looks for by name: "Test (Python 3.12)", "Test (Python 3.13)", etc.
-  # They run on ubuntu-latest as the canonical gating build.
+  # Canonical supported-Python test matrix on Linux.
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -23,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Poetry
-        run: pipx install poetry==2.3.2
+        run: pipx install poetry==2.4.1
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -40,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Poetry
-        run: pipx install poetry==2.3.2
+        run: pipx install poetry==2.4.1
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -48,6 +49,8 @@ jobs:
           cache: "poetry"
       - name: Install dependencies
         run: poetry install --with lint --no-interaction
+      - name: Run Ruff
+        run: poetry run ruff check . && poetry run ruff format --check .
       - name: Run mypy
         run: poetry run mypy
 
@@ -59,15 +62,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        python-version: ["3.12", "3.13", "3.14"]
+        os: [macos-latest]
+        python-version: ["3.14"]
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Install Poetry
-        run: pipx install poetry==2.3.2
+        run: pipx install poetry==2.4.1
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:

@@ -1,41 +1,35 @@
 """Command-line interface for textish.
 
-Invoked as ``textish <app_command> [options]`` after installation.
+Invoked as ``textish <app_ref> [options]`` after installation, where
+``app_ref`` is the import path of a Textual app (``package.module:attr``).
 """
 
 import argparse
-import asyncio
-import logging
 import sys
 
-import uvloop
-
-from . import authorized_keys, serve
+from . import (
+    _default_import_paths,
+    _run_server,
+    _setup_logging,
+    authorized_keys,
+)
 from .config import AppConfig
-
-
-def _parse_env_var(value: str) -> tuple[str, str]:
-    if "=" not in value:
-        raise argparse.ArgumentTypeError("expected KEY=VALUE")
-    key, env_value = value.split("=", 1)
-    if not key:
-        raise argparse.ArgumentTypeError("environment variable name must not be empty")
-    return key, env_value
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="textish",
-        description="Serve a Textual app over SSH.",
+        description="Serve a Textual app over SSH (one app instance per session).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "app_command",
-        help='Shell command that launches your Textual app, e.g. "python my_app.py".',
+        "app_ref",
+        help='Import path of your Textual app, e.g. "my_package.my_module:MyApp". '
+        "It must be importable from where the server runs.",
     )
     parser.add_argument(
         "--host",
-        default="0.0.0.0",
+        default="127.0.0.1",
         help="Address to listen on.",
     )
     parser.add_argument(
@@ -47,9 +41,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--host-key",
         metavar="PATH",
-        default=None,
+        default=argparse.SUPPRESS,
         dest="host_key_path",
-        help="Path to the SSH host key file. Defaults to ~/.ssh/ssh_host_key.",
+        help="Path to the SSH host key file. Defaults to ~/.ssh/textish_host_key.",
     )
     parser.add_argument(
         "--max-connections",
@@ -59,6 +53,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum simultaneous SSH sessions. 0 means unlimited.",
     )
     parser.add_argument(
+        "--idle-timeout",
+        type=float,
+        default=0,
+        metavar="SECONDS",
+        help="Close sessions idle for this long. 0 disables the timeout.",
+    )
+    parser.add_argument(
         "--authorized-keys",
         metavar="PATH",
         default=None,
@@ -66,18 +67,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to an OpenSSH authorized_keys file. Only listed keys are allowed.",
     )
     parser.add_argument(
-        "--env",
-        action="append",
-        default=[],
-        type=_parse_env_var,
-        metavar="KEY=VALUE",
-        help="Environment variable to pass to the app. Can be repeated.",
+        "--log-level",
+        default=argparse.SUPPRESS,
+        metavar="LEVEL",
+        help="Log level (DEBUG, INFO, WARNING, ...). Overrides -v. (default: INFO).",
+    )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable coloured log output.",
     )
     parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable debug logging.",
+        help="Shortcut for --log-level DEBUG.",
     )
     return parser
 
@@ -86,34 +90,33 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    level = getattr(args, "log_level", None) or ("DEBUG" if args.verbose else "INFO")
+    _setup_logging(level, color=not args.no_color)
 
     auth = authorized_keys(args.authorized_keys) if args.authorized_keys else None
 
     try:
         config = AppConfig(
-            app_command=args.app_command,
+            app_ref=args.app_ref,
             host=args.host,
             port=args.port,
-            host_key_path=args.host_key_path,
+            host_key_path=getattr(args, "host_key_path", None),
             max_connections=args.max_connections,
-            env=dict(args.env),
+            idle_timeout=args.idle_timeout,
             auth=auth,
+            import_paths=_default_import_paths(),
         )
     except ValueError as e:
         parser.error(str(e))
 
     print(
-        f"Serving on {config.host}:{config.port} — connect with: ssh -p ",
-        f"{config.port} {config.host}",
+        f"Serving on {config.host}:{config.port}, "
+        f"connect with: ssh -p {config.port} "
+        f"{'localhost' if config.host in {'0.0.0.0', '::'} else config.host}"
     )
 
     try:
-        asyncio.run(serve(config), loop_factory=uvloop.new_event_loop)
+        _run_server(config)
     except OSError as e:
         sys.exit(f"Error: {e}")
     except KeyboardInterrupt:

@@ -1,10 +1,8 @@
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
-from textish.app_session import AppSession
 from textish.server import SessionManager, TextishSSHServer
-from textish.types import ProcessState
 
 
 @pytest.fixture
@@ -22,34 +20,19 @@ def mock_ssh_conn():
 
 
 @pytest.fixture
-def mock_session():
-    """AppSession with a mocked subprocess in the RUNNING state."""
-    session = AppSession("cmd", MagicMock())
-    session._state = ProcessState.RUNNING
-    process = MagicMock()
-    process.returncode = None
-    process.wait = AsyncMock()
-    session._process = process
-    return session
-
-
-@pytest.fixture
 def make_server():
     """Factory fixture for a TextishSSHServer with required args pre-filled."""
 
     def _factory(
-        app_command="cmd",
+        app_ref="pkg.mod:App",
         max_connections=0,
         auth_function=None,
-        env=None,
     ):
         return TextishSSHServer(
-            app_command,
+            app_ref,
             max_connections=max_connections,
-            active_connections=set(),
             session_manager=SessionManager(),
             auth_function=auth_function,
-            env=env,
         )
 
     return _factory

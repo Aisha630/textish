@@ -4,10 +4,13 @@ SSH server layer for textish.
 Two asyncssh classes work together for every incoming connection:
 
 - ``TextishSSHServer``        — one instance per TCP connection; handles auth
-                                and enforces the connection limit.
+                                and participates in the shared session limit.
 - ``TextishSSHServerSession`` — one instance per shell session (i.e. after the
-                                client requests a PTY and a shell); owns the
-                                AppSession for that client.
+                                client requests a PTY and a shell); owns that
+                                client's Textual app instance.
+
+Each SSH session gets an independent Textual app instance and driver while all
+sessions share one interpreter and asyncio event loop.
 """
 
 import asyncio
@@ -17,33 +20,83 @@ from collections.abc import Awaitable, Callable, Mapping
 
 import asyncssh
 
-from .app_session import AppSession
+from .inprocess import InProcessAppSession
+from .inprocess.session import AppSource
 
 log = logging.getLogger("textish")
+
+_MAX_OUTPUT_BUFFER = 256 * 1024
 
 
 class SessionManager:
     """Tracks in-flight app session run tasks and orchestrates shutdown.
 
-    Each instance `TextishSSHServerSession` registers its run task here on
-    startup and the task is automatically removed when it completes.
-    On server shutdown, `close_all` cancels every tracked task and
-    awaits full cleanup, ensuring no subprocesses are left as orphans.
+    Each ``TextishSSHServerSession`` registers its run task here on startup and
+    the task is automatically removed when it completes. On server shutdown,
+    ``close_all`` cancels every tracked task and awaits full cleanup, ensuring no
+    app instances are left running.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_startups: int = 4) -> None:
+        if max_startups < 1:
+            raise ValueError("max_startups must be at least 1")
         self._tasks: set[asyncio.Task[None]] = set()
+        self._active_sessions = 0
+        self._startup_slots = asyncio.Semaphore(max_startups)
+
+    @property
+    def active_sessions(self) -> int:
+        """Number of reserved or running SSH app sessions."""
+        return self._active_sessions
+
+    def try_acquire(self, limit: int) -> bool:
+        """Reserve a session slot, respecting *limit* (zero means unlimited)."""
+        if limit > 0 and self._active_sessions >= limit:
+            return False
+        self._active_sessions += 1
+        return True
+
+    def release(self) -> None:
+        """Release one previously acquired session slot."""
+        if self._active_sessions > 0:
+            self._active_sessions -= 1
 
     def add(self, task: asyncio.Task[None]) -> None:
-        """Register a run task. Automatically removed when the task finishes."""
+        """Register a run task and observe its result when it finishes."""
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+
+        def task_done(done: asyncio.Task[None]) -> None:
+            self._tasks.discard(done)
+            self.release()
+            if done.cancelled():
+                return
+            exc = done.exception()
+            if exc is not None:
+                log.error("App session task failed", exc_info=exc)
+
+        task.add_done_callback(task_done)
+
+    async def run_app(self, session: InProcessAppSession) -> None:
+        """Start an app without letting connection bursts starve the event loop."""
+        await self._startup_slots.acquire()
+        released = False
+
+        def release_startup_slot() -> None:
+            nonlocal released
+            if not released:
+                released = True
+                self._startup_slots.release()
+
+        try:
+            await session.run(release_startup_slot)
+        finally:
+            release_startup_slot()
 
     async def close_all(self) -> None:
         """Cancel all tracked tasks and wait for them to finish.
 
-        Cancellation triggers each task's ``finally`` block, which terminates
-        the subprocess and closes its SSH channel.
+        Cancellation triggers each task's ``finally`` block, which stops the
+        app instance and closes its SSH channel.
         """
         closing = set(self._tasks)
         for task in closing:
@@ -52,43 +105,65 @@ class SessionManager:
 
 
 class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
-    """Bridges one SSH PTY shell session to a Textual app subprocess.
+    """Bridges one SSH PTY shell session to an independent app instance.
 
-    asyncssh calls the methods on this class in response to SSH protocol
-    events. The session creates an `~textish.app_session.AppSession`
-    once a PTY has been negotiated, then routes all data between the SSH
-    channel and the app.
+    asyncssh calls the methods on this class in response to SSH protocol events.
+    Once a PTY has been negotiated, the session creates a
+    :class:`~textish.inprocess.InProcessAppSession` and routes data between the
+    SSH channel and its app instance.
     """
 
     def __init__(
         self,
-        app_command: str,
+        app_source: AppSource,
         session_manager: SessionManager,
-        env: Mapping[str, str] | None = None,
+        idle_timeout: float = 0,
     ) -> None:
         """
         Args:
-            app_command:     Shell command passed through to ``AppSession``.
+            app_source:      App factory or import path used for each session.
             session_manager: Shared manager that tracks run tasks for shutdown.
-            env:             Environment variables for the app subprocess.
+            idle_timeout:    Seconds without client input before disconnecting.
         """
-        self._app_command = app_command
+        self._app_source = app_source
         self._session_manager = session_manager
-        self._env = env
+        self._idle_timeout = idle_timeout
         self._channel: asyncssh.SSHServerChannel[bytes] | None = None
-        self._app_session: AppSession | None = None
+        self._app_session: InProcessAppSession | None = None
         self._run_task: asyncio.Task[None] | None = None
         self._cols: int = 80
         self._rows: int = 24
-        self._term_type: str = "xterm-256color"
         self._has_pty: bool = False
-        self._input_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
-        self._input_consumer: asyncio.Task[None] | None = None
+        self._owns_slot = True
+        self._idle_handle: asyncio.TimerHandle | None = None
 
     def connection_made(self, chan: asyncssh.SSHServerChannel[bytes]) -> None:
         """Called by asyncssh when the SSH channel is established."""
         self._channel = chan
-        log.info("Channel opened")
+        chan.set_write_buffer_limits(high=_MAX_OUTPUT_BUFFER)
+        self._touch_idle_timer()
+        log.debug("Channel opened")
+
+    def _touch_idle_timer(self) -> None:
+        if self._idle_handle is not None:
+            self._idle_handle.cancel()
+        if self._idle_timeout > 0:
+            self._idle_handle = asyncio.get_running_loop().call_later(
+                self._idle_timeout, self._idle_disconnect
+            )
+
+    def _idle_disconnect(self) -> None:
+        log.info("Closing idle SSH session")
+        self._cancel_app()
+        if self._channel is not None:
+            self._channel.close()
+
+    def pause_writing(self) -> None:
+        """Disconnect a slow client instead of buffering output without bound."""
+        log.warning("Closing slow SSH session after output buffer limit")
+        self._cancel_app()
+        if self._channel is not None:
+            self._channel.close()
 
     def pty_requested(
         self,
@@ -98,204 +173,157 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
     ) -> bool:
         """Called by asyncssh when the client requests a pseudo-terminal.
 
-        Stores the initial terminal dimensions and signals approval by
-        returning ``True``. textish requires a PTY — without one the app
-        cannot render correctly.
+        Stores the initial terminal dimensions and returns ``True`` to approve.
+        textish requires a PTY — without one the app cannot render correctly.
         """
         self._cols, self._rows = term_size[0], term_size[1]
-        self._term_type = term_type or "xterm-256color"
         self._has_pty = True
         return True
 
     def shell_requested(self) -> bool:
-        """Called by asyncssh when the client requests an interactive shell.
-
-        Always approved; the actual subprocess is launched in
-        `session_started` once both PTY and shell are confirmed.
-        """
+        """Called by asyncssh when the client requests an interactive shell."""
         return True
-
-    async def _consume_input(self) -> None:
-        """Drain the input queue in order, forwarding each chunk to the app.
-
-        Runs as a single consumer so chunks are always delivered to the
-        subprocess in the order they were received, with no risk of
-        concurrent ``send_input`` calls interleaving writes.  A ``None``
-        sentinel stops the loop gracefully once all preceding data has
-        been forwarded.
-        """
-        while True:
-            data = await self._input_queue.get()
-            if data is None:
-                break
-            if self._app_session is not None:
-                await self._app_session.send_input(data)
 
     def session_started(self) -> None:
         """Called by asyncssh when the channel is fully open and ready.
 
-        Rejects non-PTY connections with an error message (e.g. clients
-        that run ``ssh host -p 2222 some-command`` without allocating a TTY).
-        For valid PTY sessions, spawns the AppSession and starts its run loop.
+        Rejects non-PTY connections with an error message. For valid PTY
+        sessions, creates the app instance and starts its run loop.
         """
-        assert (
-            self._channel is not None
-        )  # set by connection_made before session_started
+        assert self._channel is not None  # set by connection_made first
         if not self._has_pty:
             self._channel.write(b"textish requires an interactive terminal (PTY).\r\n")
             self._channel.close()
+            self._release_slot()
             return
-        self._app_session = AppSession(
-            app_command=self._app_command,
-            channel=self._channel,
-            cols=self._cols,
-            rows=self._rows,
-            term_type=self._term_type,
-            env=self._env,
-        )
-        self._run_task = asyncio.create_task(self._app_session.run())
+        try:
+            self._app_session = InProcessAppSession(
+                self._app_source,
+                self._channel,
+                cols=self._cols,
+                rows=self._rows,
+            )
+            self._run_task = asyncio.create_task(
+                self._session_manager.run_app(self._app_session)
+            )
+        except BaseException:
+            self._release_slot()
+            raise
         self._session_manager.add(self._run_task)
-        self._input_consumer = asyncio.create_task(self._consume_input())
+        self._owns_slot = False
 
     def data_received(self, data: bytes, datatype: int | None) -> None:
-        """Called by asyncssh for each chunk of data from the SSH client.
-
-        Enqueues the raw bytes so the single consumer coroutine forwards
-        them to the app in arrival order.
-        """
-        self._input_queue.put_nowait(data)
+        """Called by asyncssh for each chunk of data from the SSH client."""
+        if self._app_session is not None:
+            self._app_session.send_input(data)
+        self._touch_idle_timer()
 
     def terminal_size_changed(
         self, width: int, height: int, pixwidth: int, pixheight: int
     ) -> None:
-        """Called by asyncssh when the client terminal is resized.
-
-        Notifies the app subprocess so it can reflow its layout.
-        Pixel dimensions are reported by the client but not used by Textual.
-        """
+        """Called by asyncssh when the client terminal is resized."""
         self._cols, self._rows = width, height
+        self._touch_idle_timer()
         if self._app_session is not None:
-            asyncio.create_task(self._app_session.resize(width, height))
+            self._app_session.resize(width, height)
 
-    def eof_received(self) -> bool:
-        """Called by asyncssh when the client sends EOF (e.g. Ctrl+D).
+    def _release_slot(self) -> None:
+        if self._owns_slot:
+            self._session_manager.release()
+            self._owns_slot = False
 
-        Writes the "disable alternate screen" escape sequence so the client's
-        terminal is restored, then closes the app session. Returning ``False``
-        tells asyncssh to also close the channel.
-        """
-        if self._channel is not None:
-            try:
-                # Switch the client terminal back from the alternate screen
-                # buffer to the normal screen before disconnecting.
-                self._channel.write(b"\x1b[?1049l")
-            except Exception:
-                pass
-        # Sentinel stops the consumer after it drains any queued data.
-        self._input_queue.put_nowait(None)
+    def _cancel_app(self) -> bool:
         if self._run_task is not None and not self._run_task.done():
             self._run_task.cancel()
+            return True
         return False
 
-    def connection_lost(self, exc: Exception | None) -> None:
-        """Called by asyncssh when the TCP connection drops.
+    def eof_received(self) -> bool:
+        """Called by asyncssh when the client sends EOF (e.g. Ctrl+D)."""
+        cleanup_pending = self._cancel_app()
+        self._release_slot()
+        # Keep the output side open until Textual restores terminal mode and the
+        # app task closes the channel.
+        return cleanup_pending
 
-        Ensures the app subprocess is cleaned up even on an unexpected
-        disconnect. ``AppSession.close`` is idempotent, so calling it here
-        after ``eof_received`` has already triggered it is safe.
-        """
+    def connection_lost(self, exc: Exception | None) -> None:
+        """Called by asyncssh when the TCP connection drops."""
         if exc:
             log.warning("Connection lost with error: %s", exc)
-        else:
-            log.info("Connection closed")
-        # Cancel the consumer if eof_received didn't already stop it via sentinel.
-        if self._input_consumer is not None and not self._input_consumer.done():
-            self._input_consumer.cancel()
-        # Cancelling the run task triggers its finally block, which terminates
-        # the subprocess and closes the channel. This replaces the old
-        # fire-and-forget app_session.close() call.
-        if self._run_task is not None and not self._run_task.done():
-            self._run_task.cancel()
+        if self._idle_handle is not None:
+            self._idle_handle.cancel()
+        self._cancel_app()
+        self._release_slot()
 
 
 class TextishSSHServer(asyncssh.SSHServer):
     """Handles the SSH connection layer — authentication and connection limits.
 
     asyncssh instantiates one of these per incoming TCP connection (via the
-    factory lambda in :func:`~textish.serve`). It shares the
-    ``active_connections`` set with all sibling instances so the limit is
-    enforced across all concurrent connections.
+    factory in :func:`~textish.serve`). All instances share a ``SessionManager``
+    so the configured session limit applies across every SSH connection.
     """
 
     def __init__(
         self,
-        app_command: str,
+        app_source: AppSource,
         max_connections: int,
-        active_connections: set[asyncssh.SSHServerConnection],
         session_manager: SessionManager,
         auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = None,
-        env: Mapping[str, str] | None = None,
+        idle_timeout: float = 0,
     ) -> None:
         """
         Args:
-            app_command:        Shell command forwarded to each AppSession.
+            app_source:         App factory or import path for each session.
             max_connections:    Maximum simultaneous sessions; ``0`` = unlimited.
-            active_connections: Shared set tracked across all server instances.
             session_manager:    Shared manager that tracks run tasks for shutdown.
             auth_function:      Optional public-key validator. ``None`` allows
                                 all connections without authentication.
-            env:                Environment variables for each app subprocess.
+            idle_timeout:       Seconds without client input before disconnecting.
         """
-        self._app_command: str = app_command
-        self._max_connections: int = max_connections
-        self._active_connections: set[asyncssh.SSHServerConnection] = active_connections
-        self._session_manager: SessionManager = session_manager
+        self._app_source = app_source
+        self._max_connections = max_connections
+        self._session_manager = session_manager
         self._conn: asyncssh.SSHServerConnection | None = None
-        self._auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = (
-            auth_function
-        )
-        self._env = env
+        self._auth_function = auth_function
+        self._idle_timeout = idle_timeout
 
     def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
         """Called by asyncssh when a new TCP connection is established.
 
-        Enforces the connection limit before adding the connection to the
-        active set. Rejected connections are closed immediately.
+        Session limits are enforced when each SSH session channel is requested.
         """
         self._conn = conn
-        if len(self._active_connections) >= self._max_connections > 0:
-            log.warning(
-                "Maximum connections exceeded. Closing new connection from %s",
-                conn.get_extra_info("peername"),
-            )
-            conn.close()
-            return
-        self._active_connections.add(conn)
         log.info("Connection from %s", conn.get_extra_info("peername"))
 
     def begin_auth(self, username: str) -> bool:
-        """Called by asyncssh to determine whether authentication is required.
-
-        Returns ``True`` (auth required) only when an auth function is
-        configured; returning ``False`` grants anonymous access.
-        """
+        """Return ``True`` (auth required) only when an auth function is set."""
         return self._auth_function is not None
 
     def session_requested(
         self,
-    ) -> tuple[asyncssh.SSHServerChannel[bytes], asyncssh.SSHServerSession[bytes]]:
+    ) -> (
+        tuple[asyncssh.SSHServerChannel[bytes], asyncssh.SSHServerSession[bytes]] | bool
+    ):
         """Called by asyncssh when the client requests a shell session.
 
-        Creates the raw-bytes channel and a fresh session handler for this
-        client. ``encoding=None`` keeps data as bytes so we can forward the
-        terminal byte stream without any codec interference.
+        Creates the raw-bytes channel (``encoding=None`` so the driver can write
+        the terminal byte stream directly) and a fresh session handler.
         """
-        assert self._conn is not None  # set by connection_made before session_requested
-        channel = self._conn.create_server_channel(encoding=None)
+        assert self._conn is not None  # set by connection_made first
+        if not self._session_manager.try_acquire(self._max_connections):
+            log.warning(
+                "Maximum sessions exceeded. Rejecting session from %s",
+                self._conn.get_extra_info("peername"),
+            )
+            return False
+        try:
+            channel = self._conn.create_server_channel(encoding=None)
+        except BaseException:
+            self._session_manager.release()
+            raise
         session = TextishSSHServerSession(
-            self._app_command,
-            self._session_manager,
-            env=self._env,
+            self._app_source, self._session_manager, self._idle_timeout
         )
         return channel, session
 
@@ -304,14 +332,8 @@ class TextishSSHServer(asyncssh.SSHServer):
         return self._auth_function is not None
 
     async def validate_public_key(self, username: str, key: asyncssh.SSHKey) -> bool:
-        """Called by asyncssh to validate a client's public key.
-
-        Exports the key to OpenSSH format and delegates to the user-supplied
-        auth function, which may be sync or async.
-        """
-        assert (
-            self._auth_function is not None
-        )  # only called when public_key_auth_supported() is True
+        """Validate a client's public key via the user-supplied auth function."""
+        assert self._auth_function is not None  # only called when advertised
         public_key_str = key.export_public_key().decode().strip()
         result = self._auth_function(username, public_key_str)
         if inspect.isawaitable(result):
@@ -319,10 +341,9 @@ class TextishSSHServer(asyncssh.SSHServer):
         return result
 
     def connection_lost(self, exc: Exception | None) -> None:
-        """Called by asyncssh when the TCP connection closes.
-
-        Removes the connection from the active set. ``discard`` is used
-        instead of ``remove`` because connections that were rejected in
-        ``connection_made`` were never added.
-        """
-        self._active_connections.discard(self._conn)
+        """Called by asyncssh when the TCP connection closes."""
+        peer = self._conn.get_extra_info("peername") if self._conn else None
+        if exc:
+            log.warning("Connection from %s lost with error: %s", peer, exc)
+        else:
+            log.info("Connection closed from %s", peer)

@@ -18,11 +18,7 @@ textish/
 ├── tests/
 │   ├── unit/
 │   └── integration/          # Real AsyncSSH client/server tests
-├── examples/
-└── benchmarks/
-    ├── bench_app.py
-    ├── bench_shared.py       # Synthetic in-process session benchmark
-    └── bench_ssh.py          # Real encrypted SSH connection benchmark
+└── examples/
 ```
 
 ## Components
@@ -94,15 +90,9 @@ EOF/disconnect → cancel app task → Textual driver cleanup → close channel
 
 ## Scaling model
 
-Sharing imported modules keeps the baseline per-session overhead low. The
-included synthetic benchmark measured roughly 430–440 KB per small app session on
-one macOS/Python 3.14 machine, but widget trees, render caches, terminal size,
-and application state can change that substantially.
-
-The real-SSH benchmark measured about 464 KB of server memory per connection at
-1,000 concurrent encrypted localhost connections on the same machine. This
-includes AsyncSSH connection and channel state but not the separate client load
-generator.
+Sharing imported modules keeps the baseline per-session overhead low, but widget
+trees, render caches, terminal size, and application state can change memory use
+substantially.
 
 The trade-off is cooperative scheduling. All apps share one event loop and GIL:
 
@@ -115,7 +105,7 @@ A Python exception in one app task is contained and closes that session, but a p
 
 ## Compression
 
-AsyncSSH's default algorithm list already offers delayed `zlib@openssh.com`; clients can negotiate it with `ssh -C`. Compression is not forced because it trades bandwidth for CPU time and per-connection compressor state. This should be benchmarked against the deployment's actual terminal output and network conditions.
+AsyncSSH's default algorithm list already offers delayed `zlib@openssh.com`; clients can negotiate it with `ssh -C`. Compression is not forced because it trades bandwidth for CPU time and per-connection compressor state. Evaluate it against the deployment's actual terminal output and network conditions.
 
 ## Security responsibilities
 

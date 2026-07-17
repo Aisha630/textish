@@ -157,35 +157,9 @@ Both start a server on `127.0.0.1:2222`; connect with `ssh -p 2222 localhost`.
 
 ## Performance
 
-Sessions share imported code but keep independent app/widget state. Memory therefore depends mainly on the app tree and terminal size. Measure your app with [`benchmarks/bench_shared.py`](benchmarks/bench_shared.py):
-
-```
-python benchmarks/bench_shared.py --sessions 100
-python benchmarks/bench_shared.py --sessions 1000
-python benchmarks/bench_shared.py --sessions 100 --work 200000
-```
-
-On one macOS/Python 3.14 run, the small benchmark app used about 430–440 KB per
-live session: roughly 43 MB for 100 and 420 MB for 1,000. Those are not
-guarantees; real apps and encrypted SSH connections may use much more.
-
-For an end-to-end measurement with real TCP sockets, SSH handshakes,
-encryption, channels, and Textual apps, run:
-
-```
-python benchmarks/bench_ssh.py --sessions 100
-python benchmarks/bench_ssh.py --sessions 1000 --connect-concurrency 100 --hold 5
-```
-
-The SSH server runs in a child process, so the report separates server memory
-from the client load generator. The benchmark raises its soft file-descriptor
-limit when the operating system allows it. Start with 100 sessions before
-running the 1,000-session case.
-
-On one local macOS/Python 3.14 run, 1,000 uncompressed encrypted connections
-rendered successfully in 7.4 seconds. The server used about 453 MB above its
-baseline (464 KB per connection), while the separate client load generator used
-about 37 MB. Localhost results do not model internet latency or bandwidth.
+Sessions share imported code but keep independent app and widget state. Memory
+use therefore depends mainly on the app tree, terminal size, and data retained
+for each user.
 
 All apps share one event loop and GIL. Keep event handlers short and non-blocking,
 use async I/O, and move blocking work to a Textual worker or
@@ -194,18 +168,7 @@ service. A blocking handler can delay every connected user.
 
 ### SSH compression
 
-AsyncSSH already advertises delayed `zlib@openssh.com` compression. Clients which benefit from compression can request it with `ssh -C`. textish does not force compression because ANSI screen updates are often small or repetitive already, while compression adds CPU and per-connection state. Benchmark it with your traffic before requiring it.
-
-Compare uncompressed and compressed SSH sessions locally with:
-
-```
-python benchmarks/bench_ssh.py --sessions 100 --compression none
-python benchmarks/bench_ssh.py --sessions 100 --compression zlib
-```
-
-In the same local 100-connection test, zlib increased server memory from about
-47 MB to 63 MB without improving startup time. Remote low-bandwidth links may
-still benefit, which is why the benchmark exposes both modes.
+AsyncSSH already advertises delayed `zlib@openssh.com` compression. Clients which benefit from compression can request it with `ssh -C`. textish does not force compression because ANSI screen updates are often small or repetitive already, while compression adds CPU and per-connection state. Test it with your own traffic before enabling it broadly.
 
 ---
 

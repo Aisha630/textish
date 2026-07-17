@@ -138,24 +138,16 @@ def run_app(
     out_queue: Any,
     cols: int,
     rows: int,
-    sys_path: list[str] | None = None,
 ) -> None:
     """Subinterpreter entry point: build the app from *app_ref* and run it.
 
     *app_ref* is ``"package.module:attr"`` where ``attr`` is a zero-argument
-    callable (typically an ``App`` subclass) returning a fresh app. Called via
-    ``Interpreter.call_in_thread`` from the main interpreter.
-
-    *sys_path* is the parent interpreter's ``sys.path``, prepended here so the
-    app is importable inside this fresh subinterpreter (which otherwise omits
-    the parent's script directory and runtime path additions).
+    callable (typically an ``App`` subclass) returning a fresh app. It must be
+    importable inside the subinterpreter (an installed package, or a module on
+    ``PYTHONPATH``). Called via ``Interpreter.call_in_thread`` from the main
+    interpreter.
     """
     import asyncio
-    import sys
-
-    for entry in reversed(sys_path or []):
-        if entry and entry not in sys.path:
-            sys.path.insert(0, entry)
 
     asyncio.run(_amain(app_ref, in_queue, out_queue, cols, rows))
 

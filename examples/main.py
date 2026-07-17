@@ -1,11 +1,12 @@
 """Minimal example: serve a Textual app over SSH with textish.
 
 Each connection runs the app in its own subinterpreter (Python 3.14+). The app
-is referenced by import path, ``module:attr``, and must be importable from where
-the server runs. Here we serve ``WordleApp`` from ``examples/app.py``, so run
-this from the ``examples`` directory::
+is referenced by import path, ``module:attr``, and must be importable inside the
+subinterpreter. Real apps are usually pip-installed, so their dotted path just
+works. This bundled example is not installed, so run it from the repo root with
+the repo root on PYTHONPATH (subinterpreters honor PYTHONPATH)::
 
-    cd examples && python main.py
+    PYTHONPATH=. poetry run python -m examples.main
     # then, from another terminal:
     ssh -p 2222 localhost
 
@@ -30,7 +31,7 @@ def _ensure_host_key() -> str:
 
 async def main() -> None:
     config = AppConfig(
-        app_ref="app:WordleApp",  # examples/app.py -> WordleApp
+        app_ref="examples.app:WordleApp",  # importable as a package from repo root
         host="127.0.0.1",
         port=2222,
         host_key_path=_ensure_host_key(),

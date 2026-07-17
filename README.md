@@ -1,19 +1,21 @@
 # textish
 
-[![Python](https://img.shields.io/badge/python-3.12+-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.14+-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Built with asyncssh](https://img.shields.io/badge/built%20with-asyncssh-4a90d9)](https://asyncssh.readthedocs.io/)
 [![Powered by Textual](https://img.shields.io/badge/powered%20by-Textual-41337a)](https://github.com/Textualize/textual)
 
 ![textish demo](demo.gif)
 
-Serve [Textual](https://github.com/Textualize/textual) TUI apps over SSH. Point it at any command that runs a Textual app, give it a port, and anyone with an SSH client can connect and use the app in their terminal — no installation required on their end.
+Serve [Textual](https://github.com/Textualize/textual) TUI apps over SSH. Point it at the import path of a Textual app, give it a port, and anyone with an SSH client can connect and use the app in their terminal — no installation required on their end.
+
+Each connection runs the app in its own **subinterpreter**: separate module state and, on Python 3.14+, its own GIL, so many sessions run concurrently in a single process with real multi-core parallelism.
 
 ```python
 import asyncio
 from textish import AppConfig, serve
 
-asyncio.run(serve(AppConfig(app_command="python my_app.py", port=2222)))
+asyncio.run(serve(AppConfig(app_ref="my_package.my_module:MyApp", port=2222)))
 ```
 
 ```
@@ -24,17 +26,24 @@ ssh localhost -p 2222
 
 ## How it works
 
-Each SSH connection spawns the Textual app as a fresh subprocess attached to a server-side pseudo-terminal (PTY). textish bridges raw terminal bytes between the SSH channel and the PTY master file descriptor, so the app sees a normal terminal and can use Textual's standard terminal driver. Terminal resize events from the SSH client are applied to the PTY, causing the app to reflow just as it would in a regular shell.
+Textual talks to the outside world through a `Driver`. The stock drivers assume a real terminal: they read `sys.stdin` on a thread, write `sys.stdout`, set `termios`, and install `SIGWINCH` handlers. textish replaces that with a driver whose "terminal" is an SSH channel, and runs each app in its own subinterpreter so one server process can host many apps at once.
 
-This is the same basic idea as [wish](https://github.com/charmbracelet/wish) (Charmbracelet's SSH app framework for Go) and [inkish](https://github.com/Textualize/inkish), adapted for Python, asyncssh, and Textual apps.
+For each connection:
 
-For a deeper dive into the component design and data flow, see [ARCHITECTURE.md](ARCHITECTURE.md).
+- The main interpreter owns asyncssh (and its C dependencies such as cryptography).
+- A fresh subinterpreter is created, running only the pure-Python Textual app plus a `QueueDriver`.
+- Because a subinterpreter cannot reference the SSH channel object, bytes cross between the two over cross-interpreter queues (`concurrent.interpreters.create_queue`): app output is put on an outbound queue that a main-interpreter pump forwards to the channel; keystrokes and resizes flow back on an inbound queue.
+- Each subinterpreter runs on its own OS thread (via `Interpreter.call_in_thread`), which is what gives real parallelism.
+
+This is the same idea as [wish](https://github.com/charmbracelet/wish) (Charmbracelet's SSH app framework for Go): the app is imported and run in-process rather than launched as a subprocess.
+
+For the component design and data flow, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
 ## Installation
 
-Requires Python 3.12 or later.
+Requires Python 3.14 or later (the subinterpreter backend uses `concurrent.interpreters`, added in 3.14).
 
 ```
 pip install textish
@@ -44,26 +53,27 @@ pip install textish
 
 ## Usage
 
+Your app is referenced by **import path**, `package.module:attr`, where `attr` is a zero-argument callable (usually an `App` subclass) that returns a fresh app. It must be importable from where the server runs, because it is constructed inside each subinterpreter.
+
 ### Command line
 
 ```
-textish "python my_app.py"
-textish "python my_app.py" --port 3000
-textish "python my_app.py" --host 127.0.0.1 --port 3000 --max-connections 10
-textish "python my_app.py" --env APP_MODE=prod
+textish my_package.my_module:MyApp
+textish my_package.my_module:MyApp --port 3000
+textish my_package.my_module:MyApp --host 127.0.0.1 --port 3000 --max-connections 10
 ```
 
 ```
 $ textish --help
 usage: textish [-h] [--host HOST] [--port PORT] [--host-key PATH]
-               [--max-connections N] [--env KEY=VALUE]
-               app_command
+               [--max-connections N] [--authorized-keys PATH] [-v]
+               app_ref
 
-Serve a Textual app over SSH.
+Serve a Textual app over SSH (one subinterpreter per client).
 
 positional arguments:
-  app_command           Shell command that launches your Textual app,
-                        e.g. "python my_app.py".
+  app_ref               Import path of your Textual app, e.g.
+                        "my_package.my_module:MyApp".
 
 options:
   --host HOST           Address to listen on. (default: 0.0.0.0)
@@ -72,8 +82,9 @@ options:
                         Defaults to ~/.ssh/ssh_host_key.
   --max-connections N   Maximum simultaneous SSH sessions.
                         0 means unlimited. (default: 0)
-  --env KEY=VALUE       Environment variable to pass to the app.
-                        Can be repeated. (default: [])
+  --authorized-keys PATH
+                        Path to an OpenSSH authorized_keys file.
+  -v, --verbose         Enable debug logging.
 ```
 
 ### Python API
@@ -83,17 +94,15 @@ import asyncio
 from textish import AppConfig, serve
 
 # Note: requires a host key at ~/.ssh/ssh_host_key by default
-asyncio.run(serve(AppConfig(app_command="python my_app.py", port=2222)))
+asyncio.run(serve(AppConfig(app_ref="my_package.my_module:MyApp", port=2222)))
 ```
 
-#### Existing Event Loop
-
-If you are already inside a running event loop (for example, embedding textish inside a larger async application):
+If you are already inside a running event loop:
 
 ```python
 from textish import AppConfig, serve
 
-await serve(AppConfig(app_command="python my_app.py", port=2222))
+await serve(AppConfig(app_ref="my_package.my_module:MyApp", port=2222))
 ```
 
 #### Configuration object
@@ -102,20 +111,16 @@ await serve(AppConfig(app_command="python my_app.py", port=2222))
 from textish import AppConfig, serve
 
 config = AppConfig(
-    app_command="python my_app.py",
+    app_ref="my_package.my_module:MyApp",
     port=2222,
     max_connections=10,
-    env={"APP_MODE": "prod"},
 )
 await serve(config)
 ```
 
-App subprocesses receive only the variables in `env` plus terminal variables
-managed by textish: `TERM`, `COLUMNS`, and `ROWS`.
-
 ### Host keys
 
-By default, textish looks for a host key at `~/.ssh/ssh_host_key`. You can generate one with:
+By default, textish looks for a host key at `~/.ssh/ssh_host_key`. Generate one with:
 
 ```
 ssh-keygen -t ed25519 -f ssh_host_key -N ""
@@ -125,7 +130,7 @@ Or pass an explicit path:
 
 ```python
 await serve(AppConfig(
-    app_command="python my_app.py",
+    app_ref="my_package.my_module:MyApp",
     port=2222,
     host_key_path="./ssh_host_key",
 ))
@@ -136,14 +141,13 @@ await serve(AppConfig(
 By default, textish allows all connections without authentication — suitable for private networks. To restrict access, pass an auth callback:
 
 ```python
-ALLOWED_KEYS = {
-    "ssh-ed25519 AAAAC3Nza..."}
+ALLOWED_KEYS = {"ssh-ed25519 AAAAC3Nza..."}
 
 def auth(username: str, public_key: str) -> bool:
     return public_key in ALLOWED_KEYS
 
 await serve(AppConfig(
-    app_command="python my_app.py",
+    app_ref="my_package.my_module:MyApp",
     port=2222,
     auth=auth,
 ))
@@ -153,17 +157,34 @@ The function receives the username and the client's public key in OpenSSH format
 
 ---
 
+## Performance
+
+Because each session is a subinterpreter plus an OS thread rather than a whole subprocess, memory per session is a few MB instead of the tens of MB a fresh Python interpreter costs, and busy sessions render in parallel across cores (each subinterpreter has its own GIL on 3.14+). A reproducible benchmark is in [`benchmarks/bench_subinterp.py`](benchmarks/bench_subinterp.py):
+
+```
+python benchmarks/bench_subinterp.py --sessions 100
+python benchmarks/bench_subinterp.py --sessions 100 --work 200000   # add CPU load
+```
+
+`--work` makes each app burn CPU on mount, which is what surfaces the multi-core parallelism.
+
+---
+
+## Security
+
+Subinterpreters are an isolation and parallelism feature, **not** a security sandbox. Per the CPython documentation, they must not be relied on in security-sensitive situations: a malicious C extension can cross the boundary, and a hard crash still takes the whole process down. Run only apps you trust. For untrusted code, isolate it at the OS level instead (a separate low-privilege user, cgroup limits, and a seccomp or landlock sandbox).
+
+---
+
 ## Limitations
 
-A few things worth knowing before you deploy this anywhere serious.
+**PTY required.** textish only supports interactive shell sessions with a pseudo-terminal. Clients that connect without a PTY (for example, `ssh host -p 2222 some-command`) are rejected with an error message.
 
-**One process per connection.** Every SSH connection spawns a completely independent subprocess running your app. There is no shared state between clients, and no concept of a persistent session. If a client disconnects and reconnects, they get a brand new app instance from scratch.
+**App must be importable.** The app is loaded by import path inside a subinterpreter, so it must be on the server's import path. A shell command is not accepted.
 
-**No reconnection support.** Related to the above — if a client's connection drops mid-session, there is nothing to reconnect to. The subprocess is terminated and any in-progress state is gone.
+**Shared process.** All sessions share one OS process. A whole-process fault (a C-extension crash, out-of-memory) affects every session, unlike a one-process-per-connection design.
 
-**PTY required.** textish only supports interactive shell sessions with a pseudo-terminal. Clients that connect without a PTY (for example, `ssh host -p 2222 some-command`) will be rejected with an error message. This is a deliberate constraint, not something that is straightforward to lift.
-
-**Unix-style PTYs required.** The server-side app process is attached to a pseudo-terminal using the operating system PTY APIs. This is a natural fit on macOS and Linux; native Windows support would need a ConPTY-specific implementation.
+**Python 3.14+ and pure-Python apps.** The backend requires `concurrent.interpreters` (3.14+), and the served app and its dependencies must be subinterpreter-safe (Textual and its tree are pure Python; some third-party C extensions are not yet).
 
 ---
 
@@ -175,20 +196,15 @@ Install with dev dependencies:
 poetry install --with dev
 ```
 
-Run the tests:
+Run the tests (the end-to-end tests require Python 3.14):
 
 ```
 poetry run pytest
 ```
 
-Lint:
+Lint and type-check:
 
 ```
 poetry run ruff check .
-```
-
-Type check:
-
-```
 poetry run mypy
 ```

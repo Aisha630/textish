@@ -7,19 +7,17 @@ license = "MIT"
 authors = [
     { name = "Aisha630", email = "ayeshashafique123@gmail.com" }
 ]
-requires-python = ">=3.12,<4.0"
+requires-python = ">=3.14,<4.0"
 dependencies = [
-    "asyncssh>=2.22.0,<3.0.0",
-    "textual>=0.58.0,<1.0.0",
-    "uvloop>=0.21.0",
+    "asyncssh>=2.24.0,<3.0.0",
+    "textual>=8.2.0,<9.0.0",
+    "uvloop>=0.22.0",
 ]
 keywords = ["textual", "ssh", "tui", "terminal", "asyncio", "asyncssh"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
@@ -85,7 +83,7 @@ packages = [
 
 [tool.ruff]
 line-length = 88
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -104,7 +102,7 @@ upload_to_vcs_release = true
 
 [tool.mypy]
 files = ["src/textish"]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 
 [tool.pytest.ini_options]

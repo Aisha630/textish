@@ -1,161 +1,118 @@
 # Architecture
 
-textish serves [Textual](https://textual.textualize.io/) TUI applications over SSH. Each SSH connection gets its own isolated subprocess running the configured app, bridged via a pseudo-terminal (PTY).Syntax error in graph
+textish serves [Textual](https://textual.textualize.io/) TUI applications over SSH. Each SSH connection runs the configured app in its own **subinterpreter** (Python 3.14+), bridged to the SSH channel over cross-interpreter queues. One server process hosts many apps at once, with per-session module isolation and, thanks to the per-interpreter GIL, real multi-core parallelism.
 
 ## Directory Structure
 
 ```
 textish/
 ├── src/textish/
-│   ├── __init__.py       # Public API: serve(), authorized_keys()
-│   ├── server.py         # SSH server layer (TextishSSHServer, TextishSSHServerSession, SessionManager)
-│   ├── app_session.py    # Per-connection subprocess + PTY management
+│   ├── __init__.py       # Public API: serve(), AppConfig, authorized_keys()
+│   ├── server.py         # SSH server layer (TextishSSHServer, session, SessionManager)
 │   ├── config.py         # AppConfig dataclass with validation
 │   ├── cli.py            # CLI entry point
-│   └── types.py          # ProcessState enum
+│   └── subinterp/
+│       ├── session.py    # SubinterpAppSession — main-interpreter side
+│       ├── _worker.py    # QueueDriver + run_app — runs inside the subinterpreter
+│       └── _demo_app.py  # Small apps for the example, tests, and benchmark
 ├── tests/
-│   ├── unit/             # Mocked unit tests for server and app session
-│   └── integration/      # Real SSH server + client end-to-end tests
-└── examples/
-    ├── app.py            # Demo Wordle app (Textual)
-    └── main.py           # Minimal serve() usage
+│   ├── unit/             # Mocked unit tests for the server layer
+│   └── integration/      # Real SSH server + client end-to-end tests (3.14+)
+├── examples/
+│   ├── app.py            # Demo Wordle app (Textual)
+│   └── main.py           # Minimal serve() usage
+└── benchmarks/
+    └── bench_subinterp.py  # Per-session memory and render-time benchmark
 ```
 
 ## Component Overview
 
 ### `config.py` — AppConfig
 
-Dataclass validated at construction time. Holds all server parameters: host, port, app command, host key path, connection limit, environment variables, and an optional auth callback (sync or async).
+Dataclass validated at construction. Holds host, port, `app_ref` (the app import path `package.module:attr`), host key path, connection limit, and an optional auth callback. Validation rejects an empty or malformed `app_ref` and a missing host key file.
 
 ### `server.py` — SSH Server Layer
 
-Three classes:
+**`SessionManager`** tracks all in-flight `SubinterpAppSession.run()` tasks. On shutdown it cancels them, so no subinterpreters are left running.
 
-**`SessionManager`** tracks all in-flight `AppSession.run()` tasks. On shutdown it cancels them all, ensuring no orphaned subprocesses.
+**`TextishSSHServer`** handles one TCP connection: enforces `max_connections`, advertises public-key auth when an auth callback is configured, and creates a raw-bytes channel (`encoding=None`) plus a session for each shell request.
 
-**`TextishSSHServer`** handles one TCP connection. It enforces `max_connections`, advertises public-key auth if an auth callback is configured, and creates `(channel, session)` pairs for incoming shell requests.
+**`TextishSSHServerSession`** bridges asyncssh protocol events to a `SubinterpAppSession`:
 
-**`TextishSSHServerSession`** handles one SSH shell session. It bridges asyncssh protocol events to `AppSession`:
+- `pty_requested` — stores terminal dimensions, approves the PTY.
+- `session_started` — rejects non-PTY connections; otherwise creates the `SubinterpAppSession`, starts its run task, and starts the input consumer.
+- `data_received` — enqueues raw bytes (a single consumer coroutine forwards them in FIFO order).
+- `terminal_size_changed` — calls `SubinterpAppSession.resize()`.
+- `eof_received` / `connection_lost` — cancel the run task, which tears down the subinterpreter.
 
-- `pty_requested` — stores terminal dimensions, approves the PTY
-- `session_started` — creates the `AppSession`, starts `AppSession.run()`, starts the input consumer task
-- `data_received` — enqueues raw bytes into `_input_queue`
-- `terminal_size_changed` — calls `AppSession.resize()`
-- `eof_received` / `connection_lost` — cancels the run task
+### `subinterp/session.py` — SubinterpAppSession (main interpreter)
 
-Input is serialized through a single consumer coroutine reading from `_input_queue` to guarantee FIFO ordering. A `None` sentinel drains and stops it on disconnect.
+Creates two cross-interpreter queues and a subinterpreter, then runs the worker on its own OS thread via `Interpreter.call_in_thread`. It pumps the outbound queue to the SSH channel and forwards input, resize, and exit messages onto the inbound queue. On teardown it closes the channel, signals the worker to exit, joins the thread, and closes the interpreter. `SUBINTERP_AVAILABLE` reports whether the runtime is 3.14+.
 
-### `app_session.py` — AppSession
+### `subinterp/_worker.py` — QueueDriver + run_app (subinterpreter)
 
-Manages the lifecycle of one subprocess + PTY pair for one SSH client.
+Runs inside each subinterpreter and stays pure Python — it must not import asyncssh, uvloop, or cryptography (those live in the main interpreter).
 
-**State machine:** `PENDING → RUNNING → STOPPING → STOPPED`
+**`QueueDriver`** is a `textual.driver.Driver` that replaces the terminal assumptions: `write` puts `("D", bytes)` on the outbound queue; input bytes are fed in, decoded, parsed by Textual's `XTermParser`, and posted to the app as events; resize is an explicit call; lifecycle emits the alternate-screen / mouse / cursor sequences.
 
-`run()` is the main coroutine:
-
-1. Opens a PTY master/slave pair via `pty.openpty()`
-2. Spawns the app command as a subprocess attached to the PTY slave, then closes the slave FD in the parent
-3. Sets non-blocking I/O on the master FD; registers it with the asyncio event loop
-4. Forwards PTY output → SSH channel in a read loop
-5. On exit (normal or cancelled): closes the channel, then sends SIGTERM (escalating to SIGKILL after 3 s)
-
-`send_input(data)` writes raw bytes from the SSH client to the PTY master (handles partial writes and OS errors if the subprocess has already exited).
-
-`resize(cols, rows)` issues a `TIOCSWINSZ` ioctl so the subprocess receives `SIGWINCH` and reflows its layout.
-
-### `__init__.py` — Public API
-
-`serve(config)` is the async entry point. It creates the `SessionManager` and shared `active_connections` set, starts `asyncssh.create_server()`, and runs `serve_forever()`.
-
-`authorized_keys(path)` returns an async auth callable that re-reads an OpenSSH `authorized_keys` file on every authentication attempt and matches by key blob.
+**`run_app`** is the subinterpreter entry point: it imports the app from `app_ref`, assigns `app.driver_class` to a queue-bound driver, runs `app.run_async(size=...)`, and runs an input-pump task that drains the inbound queue.
 
 ## Data Flow
 
-### Startup
-
-```
-main() / serve()
-  → AppConfig (validate)
-  → create SessionManager + active_connections set
-  → asyncssh.create_server(TextishSSHServer factory)
-  → server.serve_forever()
-```
-
-### Connection Lifecycle
+### Connection lifecycle
 
 ```
 TCP connect
-  → TextishSSHServer.connection_made()  [enforce limit]
-  → pty_requested()                     [store dimensions]
-  → shell_requested()
+  → TextishSSHServer.connection_made()   [enforce limit]
+  → pty_requested()                       [store dimensions]
+  → session_requested()                   [raw-bytes channel + session]
   → session_started()
-      → create AppSession
-      → spawn AppSession.run() task  →  registered with SessionManager
-      → start input consumer task
+      → create SubinterpAppSession
+      → run task  →  registered with SessionManager
+      → input consumer task
 
-[RUNNING — bidirectional forwarding]
-  SSH client keystrokes → data_received() → input_queue → AppSession.send_input() → PTY master
-  PTY master output → AppSession.run() loop → channel.write() → SSH client
+[RUNNING]
+  main interpreter                         subinterpreter (own thread + GIL)
+  keystrokes → data_received → in_queue ─► input pump → QueueDriver.feed → app
+  channel.write ◄─ out pump ◄─ out_queue ◄─ QueueDriver.write ◄─ app render
 
-[RESIZE]
-  terminal_size_changed() → AppSession.resize() → ioctl(TIOCSWINSZ) → subprocess SIGWINCH
-
-[DISCONNECT]
-  eof_received() or connection_lost()
-    → cancel run task
-    → AppSession finally: close channel → SIGTERM → [SIGKILL after 3 s]
-    → SessionManager removes task
-    → TextishSSHServer.connection_lost() removes from active_connections
-```
-
-### Subprocess I/O Detail
-
-```
-SSH Client                         Subprocess (Textual app)
-   │                                       │
-   │  keystrokes                           │
-   ▼                                       │
-data_received()                            │
-   → input_queue                           │
-   → input_consumer                        │
-   → AppSession.send_input()               │
-   → os.write(master_fd) ─────────────► PTY slave stdin
-                                           │
-PTY slave stdout/stderr ◄──────────────────┘
-   → os.read(master_fd)
-   → channel.write()
-   ▼
-SSH Client terminal
+[RESIZE]  terminal_size_changed → in_queue ("R") → QueueDriver.resize
+[DISCONNECT] eof/connection_lost → cancel run task → SubinterpAppSession
+             teardown: close channel, ("X") to worker, join thread, close interp
 ```
 
 ## Key Design Decisions
 
-**One process per connection.** Each SSH session spawns a completely independent subprocess. This means there is no shared mutable state to protect — no locks, no cross-session coordination, no risk of one client's input corrupting another's app state. The tradeoff is higher resource usage at scale, but it makes the system simple to reason about and straightforward to test.
+**Subinterpreter per connection.** Each session gets its own module state and, on 3.14+, its own GIL. Sessions therefore render in parallel across cores, and a Python-level failure in one is far less likely to disturb another. This is much cheaper than a subprocess (a few MB vs tens of MB) while giving stronger isolation than running every app in one shared interpreter.
 
-The alternative would be to run Textual app instances in-process and redirect their stdio/stdin to each SSH channel. That path requires either writing a custom Textual driver, patching Textual's internals to replace its I/O assumptions, or hooking into undocumented lifecycle APIs — all of which couple textish tightly to Textual's implementation details. The subprocess approach sidesteps this entirely: the app sees a real PTY and a real terminal, exactly as it would when run locally. This is also the approach taken by [textual-web](https://github.com/Textualize/textual-web), Textual's own remote-serving project, which gives some confidence that it is the right boundary to draw.
+**C libraries stay in the main interpreter.** asyncssh and cryptography are not guaranteed subinterpreter-safe, so only the pure-Python Textual app and the driver run in the subinterpreter. Bytes cross the boundary through queues.
 
-**PTY required.** Textual relies on a real terminal to render its layout — it queries terminal capabilities, emits ANSI escape sequences, and reads raw keystrokes. Without a PTY, the app would either crash or produce garbled output. Rejecting non-PTY connections early (with a clear error message) prevents silent failures and keeps the server's scope well-defined.
+**Bytes over queues, not shared objects.** Subinterpreters do not share arbitrary Python objects, so the SSH channel cannot be handed across. The driver serialises output to `("D", bytes)` messages; a main-interpreter pump forwards them to the channel. This adds one small copy per I/O.
 
-**FIFO input queue.** Client keystrokes are buffered in an `asyncio.Queue` and drained by a single consumer coroutine before being written to the PTY master. If multiple coroutines wrote concurrently, partial writes could interleave bytes — for example, two rapid keypresses could arrive at the subprocess in scrambled order. The single-consumer pattern eliminates this without needing locks.
+**PTY required.** Textual relies on a real terminal to render. Non-PTY connections are rejected early with a clear message.
 
-**Graceful shutdown ordering.** `SessionManager` tracks every `AppSession.run()` task and cancels them all before the server exits. Without this, the event loop could stop while subprocesses were still running, leaving orphaned processes with no way to receive input or be cleaned up. Awaiting cancellation ensures every subprocess receives `SIGTERM` (and `SIGKILL` if it stalls) before the program exits.
+**FIFO input queue.** Client keystrokes are drained by a single consumer before being forwarded, so bytes reach the app in arrival order without locks.
 
-**Auth abstraction.** The `auth` callback on `AppConfig` accepts any callable — sync or async — that takes a username and public key string and returns a bool. This keeps the core server logic decoupled from any particular key store or identity provider. `authorized_keys()` covers the common case out of the box, but callers can integrate LDAP, a database, or any async service without touching server internals.
+**Graceful shutdown.** `SessionManager` cancels every run task before the server exits; each `SubinterpAppSession` tears down its subinterpreter in a `finally` block.
+
+## Security
+
+Subinterpreters are an isolation and parallelism feature, not a security boundary. The CPython documentation states they must not be used in security-sensitive situations: a malicious C extension can cross interpreters, and a hard crash still ends the whole process. Serve only trusted apps; sandbox untrusted code at the OS level (separate low-privilege user, cgroup limits, seccomp or landlock) instead.
 
 ## Technology Stack
 
 | Layer         | Library                 | Version    |
 | ------------- | ----------------------- | ---------- |
-| SSH server    | asyncssh                | ≥2.22, <3 |
-| TUI framework | textual                 | ≥0.58, <1 |
-| Async runtime | asyncio (stdlib)        | —         |
-| Language      | Python                  | ≥3.12     |
-| Linting       | ruff                    | —         |
-| Type checking | mypy (strict)           | —         |
-| Testing       | pytest + pytest-asyncio | —         |
+| SSH server    | asyncssh                | ≥2.24, <3 |
+| TUI framework | textual                 | ≥8.2, <9  |
+| Isolation     | concurrent.interpreters | stdlib (3.14+) |
+| Async runtime | asyncio / uvloop        | —         |
+| Language      | Python                  | ≥3.14     |
 
 ## Limitations
 
-- **Unix only** — PTY management uses POSIX APIs (`pty`, `termios`, `fcntl`). Windows is not supported.
-- **No reconnection** — disconnecting a client terminates the subprocess.
-- **No session sharing** — clients cannot share a running app instance.
+- **Python 3.14+ only** — the backend depends on `concurrent.interpreters`.
+- **Unix only** — targets POSIX; Windows is not supported.
+- **App must be importable** — referenced by `module:attr`, not a shell command.
+- **Shared process** — a whole-process fault affects all sessions.
+- **Subinterpreter-safe apps only** — the app and its dependencies must run under multiple interpreters (Textual and its tree are pure Python).

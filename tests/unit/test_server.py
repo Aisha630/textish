@@ -10,18 +10,17 @@ from textish.server import SessionManager, TextishSSHServerSession
 
 @pytest.mark.asyncio
 async def test_pty_requested_stores_dimensions_and_returns_true():
-    session = TextishSSHServerSession("cmd", SessionManager())
+    session = TextishSSHServerSession("pkg.mod:App", SessionManager())
     result = session.pty_requested("xterm", (132, 50, 0, 0), {})
     assert result is True
     assert session._cols == 132
     assert session._rows == 50
-    assert session._term_type == "xterm"
     assert session._has_pty is True
 
 
 @pytest.mark.asyncio
 async def test_session_started_without_pty_writes_error_and_closes(mock_channel):
-    session = TextishSSHServerSession("cmd", SessionManager())
+    session = TextishSSHServerSession("pkg.mod:App", SessionManager())
     session._channel = mock_channel
 
     session.session_started()
@@ -35,7 +34,7 @@ async def test_session_started_without_pty_writes_error_and_closes(mock_channel)
 
 @pytest.mark.asyncio
 async def test_terminal_size_changed_calls_resize():
-    session = TextishSSHServerSession("cmd", SessionManager())
+    session = TextishSSHServerSession("pkg.mod:App", SessionManager())
     calls = []
 
     async def fake_resize(cols, rows):
@@ -46,7 +45,7 @@ async def test_terminal_size_changed_calls_resize():
     session._app_session = mock_app_session
 
     session.terminal_size_changed(120, 40, 0, 0)
-    await asyncio.sleep(0)  # give the event loop a chance to run the resize task
+    await asyncio.sleep(0)  # let the event loop run the resize task
     assert calls == [(120, 40)]
 
 
@@ -63,20 +62,20 @@ async def test_session_requested_returns_channel_and_correct_session_type(
 
     assert channel is mock_channel
     assert isinstance(session, TextishSSHServerSession)
-    assert session._app_command == "cmd"
+    assert session._app_ref == "pkg.mod:App"
     mock_ssh_conn.create_server_channel.assert_called_once_with(encoding=None)
 
 
 @pytest.mark.asyncio
-async def test_session_requested_forwards_env_configuration(mock_ssh_conn, make_server):
-    server = make_server(env={"APP_ENV": "configured"})
+async def test_session_requested_forwards_app_ref(mock_ssh_conn, make_server):
+    server = make_server(app_ref="my_pkg.my_mod:MyApp")
     mock_channel = MagicMock()
     mock_ssh_conn.create_server_channel.return_value = mock_channel
     server._conn = mock_ssh_conn
 
     _channel, session = server.session_requested()
 
-    assert session._env == {"APP_ENV": "configured"}
+    assert session._app_ref == "my_pkg.my_mod:MyApp"
 
 
 @pytest.mark.asyncio

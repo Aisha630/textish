@@ -1,15 +1,16 @@
 """
 textish — serve Textual apps over SSH.
 
-Each incoming SSH connection spawns the Textual app as a fresh subprocess and
-bridges the SSH channel to a server-side pseudo-terminal.
+Each incoming SSH connection runs the Textual app in its own subinterpreter
+(its own module state and, on Python 3.14+, its own GIL), bridged to the SSH
+channel. Requires Python 3.14+.
 
 Quickstart:
 
     import asyncio
     from textish import AppConfig, serve
 
-    asyncio.run(serve(AppConfig(app_command="python my_app.py", port=2222)))
+    asyncio.run(serve(AppConfig(app_ref="my_package.my_module:MyApp", port=2222)))
 """
 
 import asyncio
@@ -39,12 +40,11 @@ async def serve(config: AppConfig) -> None:
 
     server = await asyncssh.create_server(
         lambda: TextishSSHServer(
-            config.app_command,
+            config.app_ref,
             max_connections=config.max_connections,
             active_connections=active_connections,
             session_manager=session_manager,
             auth_function=config.auth,
-            env=config.env,
         ),
         config.host,
         config.port,
@@ -72,7 +72,7 @@ def authorized_keys(path: str | Path) -> Callable[[str, str], Awaitable[bool]]:
     Example::
 
         config = AppConfig(
-            app_command="python my_app.py",
+            app_ref="my_package.my_module:MyApp",
             auth=authorized_keys("~/.ssh/authorized_keys"),
         )
         await serve(config)

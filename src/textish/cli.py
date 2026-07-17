@@ -1,6 +1,7 @@
 """Command-line interface for textish.
 
-Invoked as ``textish <app_command> [options]`` after installation.
+Invoked as ``textish <app_ref> [options]`` after installation, where
+``app_ref`` is the import path of a Textual app (``package.module:attr``).
 """
 
 import argparse
@@ -14,24 +15,16 @@ from . import authorized_keys, serve
 from .config import AppConfig
 
 
-def _parse_env_var(value: str) -> tuple[str, str]:
-    if "=" not in value:
-        raise argparse.ArgumentTypeError("expected KEY=VALUE")
-    key, env_value = value.split("=", 1)
-    if not key:
-        raise argparse.ArgumentTypeError("environment variable name must not be empty")
-    return key, env_value
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="textish",
-        description="Serve a Textual app over SSH.",
+        description="Serve a Textual app over SSH (one subinterpreter per client).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "app_command",
-        help='Shell command that launches your Textual app, e.g. "python my_app.py".',
+        "app_ref",
+        help='Import path of your Textual app, e.g. "my_package.my_module:MyApp". '
+        "It must be importable from where the server runs.",
     )
     parser.add_argument(
         "--host",
@@ -66,14 +59,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to an OpenSSH authorized_keys file. Only listed keys are allowed.",
     )
     parser.add_argument(
-        "--env",
-        action="append",
-        default=[],
-        type=_parse_env_var,
-        metavar="KEY=VALUE",
-        help="Environment variable to pass to the app. Can be repeated.",
-    )
-    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -96,12 +81,11 @@ def main() -> None:
 
     try:
         config = AppConfig(
-            app_command=args.app_command,
+            app_ref=args.app_ref,
             host=args.host,
             port=args.port,
             host_key_path=args.host_key_path,
             max_connections=args.max_connections,
-            env=dict(args.env),
             auth=auth,
         )
     except ValueError as e:

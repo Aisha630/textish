@@ -11,15 +11,15 @@ env:
   PYTEST_ADDOPTS: "--color=yes"
 
 jobs:
-  # These three jobs produce the required status checks that branch protection
-  # looks for by name: "Test (Python 3.12)", "Test (Python 3.13)", etc.
-  # They run on ubuntu-latest as the canonical gating build.
+  # This job produces the required status check that branch protection
+  # looks for by name: "Test (Python 3.14)".
+  # It runs on ubuntu-latest as the canonical gating build.
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
+        python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v4
       - name: Install Poetry
@@ -44,7 +44,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: "poetry"
       - name: Install dependencies
         run: poetry install --with lint --no-interaction
@@ -60,7 +60,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.12", "3.13", "3.14"]
+        python-version: ["3.14"]
     defaults:
       run:
         shell: bash

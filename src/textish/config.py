@@ -1,5 +1,5 @@
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_HOST_KEY_PATH = "~/.ssh/ssh_host_key"
@@ -29,6 +29,10 @@ class AppConfig:
                          Signature: ``(username, public_key_str) -> bool``.
                          May also be async. ``None`` allows all logins without
                          authentication.
+        import_paths:    Extra ``sys.path`` entries prepended inside each
+                         subinterpreter so ``app_ref`` is importable there
+                         (e.g. the directory of a local, non-installed app).
+                         Usually filled in for you by :func:`~textish.serve`.
     """
 
     host: str = "0.0.0.0"
@@ -37,6 +41,7 @@ class AppConfig:
     host_key_path: str | None = None
     max_connections: int = 0
     auth: Callable[[str, str], bool | Awaitable[bool]] | None = None
+    import_paths: Sequence[str] = field(default_factory=tuple)
 
     @property
     def host_keys(self) -> tuple[str, ...]:

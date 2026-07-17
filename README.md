@@ -7,18 +7,21 @@
 
 ![textish demo](demo.gif)
 
-Serve [Textual](https://github.com/Textualize/textual) TUI apps over SSH. Point it at the import path of a Textual app, give it a port, and anyone with an SSH client can connect and use the app in their terminal — no installation required on their end.
+Serve [Textual](https://github.com/Textualize/textual) TUI apps over SSH. Import your Textual app, hand it to `serve`, and anyone with an SSH client can connect and use the app in their terminal — no installation required on their end.
 
 Each connection runs the app in its own **subinterpreter**: separate module state and, on Python 3.14+, its own GIL, so many sessions run concurrently in a single process with real multi-core parallelism.
 
 ```python
-import asyncio
-from textish import AppConfig, serve
+# run.py
+from textish import serve
+from myapp import MyApp   # your Textual App, in an importable module
 
-asyncio.run(serve(AppConfig(app_ref="my_package.my_module:MyApp", port=2222)))
+serve(MyApp, port=2222)
 ```
 
 ```
+python run.py
+# then, from another terminal:
 ssh localhost -p 2222
 ```
 
@@ -53,7 +56,7 @@ pip install textish
 
 ## Usage
 
-Your app is referenced by **import path**, `package.module:attr`, where `attr` is a zero-argument callable (usually an `App` subclass) that returns a fresh app. It must be importable from where the server runs, because it is constructed inside each subinterpreter.
+Pass `serve` your `App` subclass (or a zero-argument factory, or a `"module:attr"` string). It must live in an importable module — not inside the script you run directly — because each connection re-imports it in its own subinterpreter. `serve` blocks until interrupted and generates a host key on first run.
 
 ### Command line
 
@@ -90,50 +93,32 @@ options:
 ### Python API
 
 ```python
-import asyncio
-from textish import AppConfig, serve
+from textish import serve
+from myapp import MyApp
 
-# Note: requires a host key at ~/.ssh/ssh_host_key by default
-asyncio.run(serve(AppConfig(app_ref="my_package.my_module:MyApp", port=2222)))
+serve(MyApp, port=2222, max_connections=10)
 ```
 
-If you are already inside a running event loop:
+`serve` blocks and runs its own event loop. If you are embedding textish in a program that already has a running loop, build an `AppConfig` and use the async entry point instead:
 
 ```python
-from textish import AppConfig, serve
+from textish import AppConfig, serve_async
 
-await serve(AppConfig(app_ref="my_package.my_module:MyApp", port=2222))
-```
-
-#### Configuration object
-
-```python
-from textish import AppConfig, serve
-
-config = AppConfig(
-    app_ref="my_package.my_module:MyApp",
-    port=2222,
-    max_connections=10,
-)
-await serve(config)
+await serve_async(AppConfig(app_ref="myapp:MyApp", port=2222))
 ```
 
 ### Host keys
 
-By default, textish looks for a host key at `~/.ssh/ssh_host_key`. Generate one with:
+`serve` generates a host key at `./ssh_host_key` on first run. To use a specific key, pass a path (it is generated there if missing):
+
+```python
+serve(MyApp, port=2222, host_key_path="~/.ssh/ssh_host_key")
+```
+
+Or generate one yourself:
 
 ```
 ssh-keygen -t ed25519 -f ssh_host_key -N ""
-```
-
-Or pass an explicit path:
-
-```python
-await serve(AppConfig(
-    app_ref="my_package.my_module:MyApp",
-    port=2222,
-    host_key_path="./ssh_host_key",
-))
 ```
 
 ### Public-key authentication
@@ -146,14 +131,10 @@ ALLOWED_KEYS = {"ssh-ed25519 AAAAC3Nza..."}
 def auth(username: str, public_key: str) -> bool:
     return public_key in ALLOWED_KEYS
 
-await serve(AppConfig(
-    app_ref="my_package.my_module:MyApp",
-    port=2222,
-    auth=auth,
-))
+serve(MyApp, port=2222, auth=auth)
 ```
 
-The function receives the username and the client's public key in OpenSSH format. It may also be `async`.
+The function receives the username and the client's public key in OpenSSH format. It may also be `async`. See also `authorized_keys()` for reading an OpenSSH `authorized_keys` file.
 
 ---
 

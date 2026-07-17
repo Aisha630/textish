@@ -68,14 +68,17 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
         self,
         app_ref: str,
         session_manager: SessionManager,
+        import_paths: tuple[str, ...] = (),
     ) -> None:
         """
         Args:
             app_ref:         Import path (``module:attr``) of the app to serve.
             session_manager: Shared manager that tracks run tasks for shutdown.
+            import_paths:    Extra sys.path entries for the subinterpreter.
         """
         self._app_ref = app_ref
         self._session_manager = session_manager
+        self._import_paths = import_paths
         self._channel: asyncssh.SSHServerChannel[bytes] | None = None
         self._app_session: SubinterpAppSession | None = None
         self._run_task: asyncio.Task[None] | None = None
@@ -138,6 +141,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
             self._channel,
             cols=self._cols,
             rows=self._rows,
+            import_paths=self._import_paths,
         )
         self._run_task = asyncio.create_task(self._app_session.run())
         self._session_manager.add(self._run_task)
@@ -197,6 +201,7 @@ class TextishSSHServer(asyncssh.SSHServer):
         active_connections: set[asyncssh.SSHServerConnection],
         session_manager: SessionManager,
         auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = None,
+        import_paths: tuple[str, ...] = (),
     ) -> None:
         """
         Args:
@@ -206,6 +211,7 @@ class TextishSSHServer(asyncssh.SSHServer):
             session_manager:    Shared manager that tracks run tasks for shutdown.
             auth_function:      Optional public-key validator. ``None`` allows
                                 all connections without authentication.
+            import_paths:       Extra sys.path entries for each subinterpreter.
         """
         self._app_ref: str = app_ref
         self._max_connections: int = max_connections
@@ -215,6 +221,7 @@ class TextishSSHServer(asyncssh.SSHServer):
         self._auth_function: Callable[[str, str], bool | Awaitable[bool]] | None = (
             auth_function
         )
+        self._import_paths: tuple[str, ...] = import_paths
 
     def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
         """Called by asyncssh when a new TCP connection is established.
@@ -247,7 +254,9 @@ class TextishSSHServer(asyncssh.SSHServer):
         """
         assert self._conn is not None  # set by connection_made first
         channel = self._conn.create_server_channel(encoding=None)
-        session = TextishSSHServerSession(self._app_ref, self._session_manager)
+        session = TextishSSHServerSession(
+            self._app_ref, self._session_manager, self._import_paths
+        )
         return channel, session
 
     def public_key_auth_supported(self) -> bool:

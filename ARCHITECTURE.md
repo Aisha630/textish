@@ -7,7 +7,7 @@ textish serves [Textual](https://textual.textualize.io/) TUI applications over S
 ```
 textish/
 ├── src/textish/
-│   ├── __init__.py       # Public API: serve(), AppConfig, authorized_keys()
+│   ├── __init__.py       # Public API: serve()/serve_async(), AppConfig, authorized_keys()
 │   ├── server.py         # SSH server layer (TextishSSHServer, session, SessionManager)
 │   ├── config.py         # AppConfig dataclass with validation
 │   ├── cli.py            # CLI entry point
@@ -27,9 +27,13 @@ textish/
 
 ## Component Overview
 
+### `__init__.py` — Public API
+
+`serve(app, *, host, port, ...)` is the friendly, blocking entry point. It accepts a Textual `App` subclass, a zero-argument factory, or a `"module:attr"` string; derives the `module:qualname` import ref (rejecting apps defined in `__main__`, which a subinterpreter cannot import); forwards the running script's directory and cwd as `import_paths` so a local app is importable in the subinterpreter; generates a host key if needed; and runs the server (with uvloop if installed). `serve_async(config)` is the async entry for embedding in an existing event loop. `authorized_keys(path)` returns an auth callback backed by an OpenSSH `authorized_keys` file.
+
 ### `config.py` — AppConfig
 
-Dataclass validated at construction. Holds host, port, `app_ref` (the app import path `package.module:attr`), host key path, connection limit, and an optional auth callback. Validation rejects an empty or malformed `app_ref` and a missing host key file.
+Dataclass validated at construction. Holds host, port, `app_ref` (the app import path `package.module:attr`), host key path, connection limit, an optional auth callback, and `import_paths` (extra `sys.path` entries for the subinterpreter). Validation rejects an empty or malformed `app_ref` and a missing host key file.
 
 ### `server.py` — SSH Server Layer
 

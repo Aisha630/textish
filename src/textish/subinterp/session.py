@@ -54,6 +54,7 @@ class SubinterpAppSession:
         channel: asyncssh.SSHServerChannel[bytes],
         cols: int = 80,
         rows: int = 24,
+        import_paths: tuple[str, ...] = (),
     ) -> None:
         """
         Args:
@@ -63,6 +64,8 @@ class SubinterpAppSession:
             channel: asyncssh channel for bidirectional terminal bytes.
             cols:    Initial terminal width in columns.
             rows:    Initial terminal height in rows.
+            import_paths: Extra sys.path entries prepended in the subinterpreter
+                     so app_ref is importable there.
         """
         if not SUBINTERP_AVAILABLE:
             raise RuntimeError(
@@ -73,6 +76,7 @@ class SubinterpAppSession:
         self._channel = channel
         self._cols = cols
         self._rows = rows
+        self._import_paths = tuple(import_paths)
         self._in_q: object | None = None
         self._out_q: object | None = None
         self._interp: object | None = None
@@ -91,10 +95,14 @@ class SubinterpAppSession:
         self._out_q = _interpreters.create_queue()
         self._interp = _interpreters.create()
         # call_in_thread runs run_app in the subinterpreter on a new OS thread.
-        # The app named by app_ref must be importable inside the subinterpreter
-        # (an installed package, or a module on PYTHONPATH).
         self._thread = self._interp.call_in_thread(
-            run_app, self._app_ref, self._in_q, self._out_q, self._cols, self._rows
+            run_app,
+            self._app_ref,
+            self._in_q,
+            self._out_q,
+            self._cols,
+            self._rows,
+            self._import_paths,
         )
 
         try:

@@ -5,16 +5,21 @@ Each incoming SSH connection runs the Textual app in its own subinterpreter
 (its own module state and, on Python 3.14+, its own GIL), bridged to the SSH
 channel. Requires Python 3.14+.
 
-Quickstart:
+Quickstart — import your app and serve it:
 
-    import asyncio
-    from textish import AppConfig, serve
+    # run.py
+    from textish import serve
+    from myapp import MyApp   # your Textual App, in an importable module
 
-    asyncio.run(serve(AppConfig(app_ref="my_package.my_module:MyApp", port=2222)))
+    serve(MyApp, port=2222)
+
+Then ``python run.py`` and connect with ``ssh -p 2222 localhost``.
 """
 
 import asyncio
 import logging
+import os
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -26,13 +31,108 @@ from .server import SessionManager, TextishSSHServer
 log = logging.getLogger("textish")
 
 
-async def serve(config: AppConfig) -> None:
-    """Start the SSH server and serve a Textual app to connecting clients.
+def _resolve_app(app: object) -> str:
+    """Derive the ``module:qualname`` import ref for *app*.
 
-    Runs until cancelled.
+    Accepts an ``App`` subclass, any zero-argument factory, or a ready
+    ``"module:attr"`` string. Rejects objects defined in ``__main__`` because a
+    subinterpreter cannot import the main script.
+    """
+    if isinstance(app, str):
+        return app
+    module = getattr(app, "__module__", "")
+    qualname = getattr(app, "__qualname__", "")
+    if not module or not qualname:
+        raise TypeError(
+            "serve() expects a Textual App subclass, a zero-argument factory, "
+            "or a 'module:attr' string."
+        )
+    if module == "__main__":
+        raise ValueError(
+            "Define your app in an importable module and import it, e.g. "
+            "`from myapp import MyApp; serve(MyApp)`. It cannot live in the "
+            "script you run directly, because each connection re-imports it in a "
+            "fresh subinterpreter that has no '__main__'."
+        )
+    return f"{module}:{qualname}"
+
+
+def _default_import_paths() -> tuple[str, ...]:
+    """Path entries that let a local (non-installed) app import in a subinterp.
+
+    A fresh subinterpreter does not inherit the parent's script directory, so we
+    forward the running script's directory and the current working directory.
+    """
+    paths: list[str] = []
+    if sys.path and sys.path[0]:
+        paths.append(os.path.abspath(sys.path[0]))
+    cwd = os.getcwd()
+    if cwd not in paths:
+        paths.append(cwd)
+    return tuple(paths)
+
+
+def _ensure_host_key(host_key_path: str | None) -> str:
+    """Return a host key path, generating an ed25519 key if none exists."""
+    path = Path(host_key_path).expanduser() if host_key_path else Path("ssh_host_key")
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        asyncssh.generate_private_key("ssh-ed25519").write_private_key(str(path))
+        log.info("Generated SSH host key at %s", path)
+    return str(path)
+
+
+def serve(
+    app: object,
+    *,
+    host: str = "0.0.0.0",
+    port: int = 2222,
+    host_key_path: str | None = None,
+    max_connections: int = 0,
+    auth: Callable[[str, str], bool | Awaitable[bool]] | None = None,
+) -> None:
+    """Serve a Textual app over SSH. Blocks until interrupted.
 
     Args:
-        config: Validated server configuration.
+        app: Your Textual ``App`` subclass, a zero-argument factory returning an
+             app, or a ``"module:attr"`` import string. It must live in an
+             importable module (not the ``__main__`` script).
+        host, port: Listen address.
+        host_key_path: SSH host key file. If omitted, ``./ssh_host_key`` is used
+             and generated on first run.
+        max_connections: ``0`` means unlimited.
+        auth: Optional public-key auth callback (see :func:`authorized_keys`).
+
+    Example::
+
+        from textish import serve
+        from myapp import MyApp
+        serve(MyApp, port=2222)
+    """
+    config = AppConfig(
+        app_ref=_resolve_app(app),
+        host=host,
+        port=port,
+        host_key_path=_ensure_host_key(host_key_path),
+        max_connections=max_connections,
+        auth=auth,
+        import_paths=_default_import_paths(),
+    )
+    try:
+        import uvloop
+
+        asyncio.run(serve_async(config), loop_factory=uvloop.new_event_loop)
+    except ImportError:
+        asyncio.run(serve_async(config))
+    except KeyboardInterrupt:
+        pass
+
+
+async def serve_async(config: AppConfig) -> None:
+    """Start the SSH server from a validated config. Runs until cancelled.
+
+    Use this when embedding textish in an existing asyncio program; most callers
+    want the simpler blocking :func:`serve` instead.
     """
     # Track connections for graceful shutdown and max_connections enforcement.
     active_connections: set[asyncssh.SSHServerConnection] = set()
@@ -45,6 +145,7 @@ async def serve(config: AppConfig) -> None:
             active_connections=active_connections,
             session_manager=session_manager,
             auth_function=config.auth,
+            import_paths=tuple(config.import_paths),
         ),
         config.host,
         config.port,
@@ -71,11 +172,7 @@ def authorized_keys(path: str | Path) -> Callable[[str, str], Awaitable[bool]]:
 
     Example::
 
-        config = AppConfig(
-            app_ref="my_package.my_module:MyApp",
-            auth=authorized_keys("~/.ssh/authorized_keys"),
-        )
-        await serve(config)
+        serve(MyApp, auth=authorized_keys("~/.ssh/authorized_keys"))
     """
     resolved = Path(path).expanduser()
 
@@ -105,4 +202,4 @@ def authorized_keys(path: str | Path) -> Callable[[str, str], Awaitable[bool]]:
     return _auth
 
 
-__all__ = ["serve", "AppConfig", "authorized_keys"]
+__all__ = ["serve", "serve_async", "AppConfig", "authorized_keys"]

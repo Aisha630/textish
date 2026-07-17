@@ -7,11 +7,12 @@ Invoked as ``textish <app_ref> [options]`` after installation, where
 import argparse
 import asyncio
 import logging
+import os
 import sys
 
 import uvloop
 
-from . import authorized_keys, serve
+from . import _default_import_paths, _ensure_host_key, authorized_keys, serve_async
 from .config import AppConfig
 
 
@@ -84,20 +85,22 @@ def main() -> None:
             app_ref=args.app_ref,
             host=args.host,
             port=args.port,
-            host_key_path=args.host_key_path,
+            host_key_path=_ensure_host_key(args.host_key_path),
             max_connections=args.max_connections,
             auth=auth,
+            # cwd first so a local module referenced by app_ref imports.
+            import_paths=(os.getcwd(), *_default_import_paths()),
         )
     except ValueError as e:
         parser.error(str(e))
 
     print(
-        f"Serving on {config.host}:{config.port} — connect with: ssh -p ",
-        f"{config.port} {config.host}",
+        f"Serving on {config.host}:{config.port}, "
+        f"connect with: ssh -p {config.port} {config.host}"
     )
 
     try:
-        asyncio.run(serve(config), loop_factory=uvloop.new_event_loop)
+        asyncio.run(serve_async(config), loop_factory=uvloop.new_event_loop)
     except OSError as e:
         sys.exit(f"Error: {e}")
     except KeyboardInterrupt:

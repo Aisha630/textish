@@ -91,7 +91,7 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
     def connection_made(self, chan: asyncssh.SSHServerChannel[bytes]) -> None:
         """Called by asyncssh when the SSH channel is established."""
         self._channel = chan
-        log.info("Channel opened")
+        log.debug("Channel opened")
 
     def pty_requested(
         self,
@@ -176,8 +176,6 @@ class TextishSSHServerSession(asyncssh.SSHServerSession[bytes]):
         """Called by asyncssh when the TCP connection drops."""
         if exc:
             log.warning("Connection lost with error: %s", exc)
-        else:
-            log.info("Connection closed")
         if self._input_consumer is not None and not self._input_consumer.done():
             self._input_consumer.cancel()
         # Cancelling the run task triggers its finally block, which tears down
@@ -274,4 +272,9 @@ class TextishSSHServer(asyncssh.SSHServer):
 
     def connection_lost(self, exc: Exception | None) -> None:
         """Called by asyncssh when the TCP connection closes."""
+        peer = self._conn.get_extra_info("peername") if self._conn else None
+        if exc:
+            log.warning("Connection from %s lost with error: %s", peer, exc)
+        else:
+            log.info("Connection closed from %s", peer)
         self._active_connections.discard(self._conn)

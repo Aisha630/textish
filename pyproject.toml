@@ -12,6 +12,7 @@ dependencies = [
     "asyncssh>=2.24.0,<3.0.0",
     "textual>=8.2.0,<9.0.0",
     "uvloop>=0.22.0",
+    "colorlog>=6.9.0,<7.0.0",
 ]
 keywords = ["textual", "ssh", "tui", "terminal", "asyncio", "asyncssh"]
 classifiers = [

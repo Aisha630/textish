@@ -6,13 +6,18 @@ Invoked as ``textish <app_ref> [options]`` after installation, where
 
 import argparse
 import asyncio
-import logging
 import os
 import sys
 
 import uvloop
 
-from . import _default_import_paths, _ensure_host_key, authorized_keys, serve_async
+from . import (
+    _default_import_paths,
+    _ensure_host_key,
+    _setup_logging,
+    authorized_keys,
+    serve_async,
+)
 from .config import AppConfig
 
 
@@ -60,10 +65,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to an OpenSSH authorized_keys file. Only listed keys are allowed.",
     )
     parser.add_argument(
+        "--log-level",
+        default=None,
+        metavar="LEVEL",
+        help="Log level (DEBUG, INFO, WARNING, ...). Overrides -v. (default: INFO)",
+    )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable coloured log output.",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable debug logging.",
+        help="Shortcut for --log-level DEBUG.",
     )
     return parser
 
@@ -72,11 +88,8 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    level = args.log_level or ("DEBUG" if args.verbose else "INFO")
+    _setup_logging(level, color=not args.no_color)
 
     auth = authorized_keys(args.authorized_keys) if args.authorized_keys else None
 

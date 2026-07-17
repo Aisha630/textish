@@ -76,6 +76,51 @@ def _default_import_paths() -> tuple[str, ...]:
     return tuple(paths)
 
 
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+_LOG_DATEFMT = "%H:%M:%S"
+
+
+def _setup_logging(
+    level: int | str | None,
+    color: bool = True,
+    logger: logging.Logger | None = None,
+) -> None:
+    """Install a stderr log handler unless logging is already configured.
+
+    Respects any existing configuration (does nothing if the target logger
+    already has handlers), so callers who set up their own logging are never
+    overridden. Uses coloured output via ``colorlog`` when it is installed and
+    *color* is true; otherwise falls back to a plain formatter.
+
+    Args:
+        level: Log level (e.g. ``"INFO"``/``logging.DEBUG``). ``None`` disables.
+        color: Prefer coloured output when ``colorlog`` is available.
+        logger: Target logger (defaults to the root logger).
+    """
+    if level is None:
+        return
+    target = logger if logger is not None else logging.getLogger()
+    if target.handlers:
+        return
+
+    handler = logging.StreamHandler()
+    formatter: logging.Formatter | None = None
+    if color:
+        try:
+            import colorlog
+
+            formatter = colorlog.ColoredFormatter(
+                "%(log_color)s%(asctime)s %(levelname)-8s%(reset)s "
+                "%(cyan)s%(name)s%(reset)s: %(message)s",
+                datefmt=_LOG_DATEFMT,
+            )
+        except ImportError:
+            formatter = None
+    handler.setFormatter(formatter or logging.Formatter(_LOG_FORMAT, _LOG_DATEFMT))
+    target.addHandler(handler)
+    target.setLevel(level)
+
+
 def _ensure_host_key(host_key_path: str | None) -> str:
     """Return a host key path, generating an ed25519 key if none exists."""
     import asyncssh
@@ -97,6 +142,7 @@ def serve(
     max_connections: int = 0,
     auth: Callable[[str, str], bool | Awaitable[bool]] | None = None,
     log_level: int | str | None = "INFO",
+    log_color: bool = True,
 ) -> None:
     """Serve a Textual app over SSH. Blocks until interrupted.
 
@@ -110,9 +156,10 @@ def serve(
         max_connections: ``0`` means unlimited.
         auth: Optional public-key auth callback (see :func:`authorized_keys`).
         log_level: If set (default ``"INFO"``) and logging is not already
-             configured, install a basic stderr log handler at this level so the
+             configured, install a stderr log handler at this level so the
              server prints connection and lifecycle logs. Pass ``None`` to leave
              logging untouched and configure it yourself.
+        log_color: Use coloured logs when ``colorlog`` is installed (default).
 
     Example::
 
@@ -120,12 +167,7 @@ def serve(
         from myapp import MyApp
         serve(MyApp, port=2222)
     """
-    if log_level is not None and not logging.getLogger().handlers:
-        logging.basicConfig(
-            level=log_level,
-            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-            datefmt="%H:%M:%S",
-        )
+    _setup_logging(log_level, color=log_color)
 
     config = AppConfig(
         app_ref=_resolve_app(app),

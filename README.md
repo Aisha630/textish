@@ -138,6 +138,17 @@ The function receives the username and the client's public key in OpenSSH format
 
 ---
 
+## Examples
+
+The `examples/` directory has two runnable apps:
+
+- `examples/main.py` — a small Wordle game (`python examples/main.py`).
+- `examples/serve_docbrowser.py` — a document browser with a clickable sidebar and a long, scrollable Markdown pane, showing text rendering, scrolling, and mouse interaction (`python examples/serve_docbrowser.py`). Use a large terminal window.
+
+Both start a server on `127.0.0.1:2222`; connect with `ssh -p 2222 localhost`.
+
+---
+
 ## Performance
 
 Because each session is a subinterpreter plus an OS thread rather than a whole subprocess, memory per session is a few MB instead of the tens of MB a fresh Python interpreter costs, and busy sessions render in parallel across cores (each subinterpreter has its own GIL on 3.14+). A reproducible benchmark is in [`benchmarks/bench_subinterp.py`](benchmarks/bench_subinterp.py):

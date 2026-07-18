@@ -2,8 +2,8 @@
 
 [![Python](https://img.shields.io/badge/python-3.12+-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Built with asyncssh](https://img.shields.io/badge/built%20with-asyncssh-4a90d9)](https://asyncssh.readthedocs.io/)
-[![Powered by Textual](https://img.shields.io/badge/powered%20by-Textual-41337a)](https://github.com/Textualize/textual)
+[![Built with asyncssh](<https://img.shields.io/badge/built%20with-asyncssh-4a90d9>)](https://asyncssh.readthedocs.io/)
+[![Powered by Textual](<https://img.shields.io/badge/powered%20by-Textual-41337a>)](https://github.com/Textualize/textual)
 
 ![textish demo](demo.gif)
 

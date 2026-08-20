@@ -32,7 +32,7 @@ jobs:
           cache: "poetry"
       - name: Install dependencies
         run: poetry install --with test --no-interaction
-      - name: Run tests
+      - name: Run tests (includes multi-worker benchmark smoke)
         run: poetry run pytest tests -v
 
   typecheck:
@@ -78,5 +78,5 @@ jobs:
           cache: "poetry"
       - name: Install dependencies
         run: poetry install --with test --no-interaction
-      - name: Run tests
+      - name: Run tests (includes multi-worker benchmark smoke)
         run: poetry run pytest tests -v

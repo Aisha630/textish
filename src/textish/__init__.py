@@ -18,13 +18,19 @@ Then ``python run.py`` and connect with ``ssh -p 2222 localhost``.
 import asyncio
 import importlib
 import logging
+import multiprocessing as mp
 import os
+import signal
 import stat
 import sys
+import time
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
+from multiprocessing.process import BaseProcess
 from pathlib import Path
 
 from .config import AppConfig
+from .metrics import MetricsCallback, MetricsSnapshot, run_metrics_reporter
 
 # AsyncSSH is imported lazily so importing the public API remains lightweight.
 
@@ -42,7 +48,7 @@ def _default_import_paths() -> tuple[str, ...]:
     return tuple(paths)
 
 
-_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s[%(process)d]: %(message)s"
 _LOG_DATEFMT = "%H:%M:%S"
 
 
@@ -77,7 +83,7 @@ def _setup_logging(
 
             formatter = colorlog.ColoredFormatter(
                 "%(log_color)s%(asctime)s %(levelname)-8s%(reset)s "
-                "%(cyan)s%(name)s%(reset)s: %(message)s",
+                "%(cyan)s%(name)s[%(process)d]%(reset)s: %(message)s",
                 datefmt=_LOG_DATEFMT,
             )
         except ImportError:
@@ -122,14 +128,85 @@ def _ensure_host_key(host_key_path: str | None) -> str:
     return str(path)
 
 
-def _run_server(config: AppConfig) -> None:
-    """Run the async server, preferring uvloop when its optional extra exists."""
+def _run_event_loop(config: AppConfig, *, reuse_port: bool = False) -> None:
+    """Run one listener, preferring uvloop when its optional extra exists."""
     try:
         uvloop = importlib.import_module("uvloop")
     except ImportError:
-        asyncio.run(serve_async(config))
+        asyncio.run(_serve_async(config, reuse_port=reuse_port))
     else:
-        asyncio.run(serve_async(config), loop_factory=uvloop.new_event_loop)
+        asyncio.run(
+            _serve_async(config, reuse_port=reuse_port),
+            loop_factory=uvloop.new_event_loop,
+        )
+
+
+def _worker_main(config: AppConfig) -> None:
+    """Process entry point for one shared-port server worker."""
+    try:
+        _run_event_loop(config, reuse_port=True)
+    except KeyboardInterrupt:
+        pass
+
+
+def _stop_workers(processes: list[BaseProcess], grace_period: float = 5) -> None:
+    """Ask workers to shut down cleanly, then terminate stragglers."""
+    for process in processes:
+        if process.is_alive() and process.pid is not None:
+            try:
+                os.kill(process.pid, signal.SIGINT)
+            except ProcessLookupError:
+                pass
+
+    deadline = time.monotonic() + grace_period
+    for process in processes:
+        process.join(max(0, deadline - time.monotonic()))
+
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+    for process in processes:
+        process.join()
+
+
+def _run_server(config: AppConfig) -> None:
+    """Run one listener or supervise multiple shared-port worker processes."""
+    if config.workers == 1:
+        _run_event_loop(config)
+        return
+
+    # Create the key once before forking so every worker presents the same key.
+    worker_config = replace(
+        config,
+        host_key_path=_ensure_host_key(config.host_key_path),
+        workers=1,
+    )
+    context = mp.get_context("fork")
+    processes: list[BaseProcess] = [
+        context.Process(
+            target=_worker_main,
+            args=(worker_config,),
+            name=f"textish-worker-{index + 1}",
+        )
+        for index in range(config.workers)
+    ]
+
+    log.info("Starting %d textish workers", config.workers)
+    started: list[BaseProcess] = []
+    try:
+        for process in processes:
+            process.start()
+            started.append(process)
+        while True:
+            for process in started:
+                process.join(0.1)
+                if process.exitcode is not None:
+                    raise RuntimeError(
+                        f"{process.name} exited unexpectedly with "
+                        f"status {process.exitcode}"
+                    )
+    finally:
+        _stop_workers(started)
 
 
 def serve(
@@ -138,8 +215,21 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 2222,
     host_key_path: str | None = None,
+    workers: int = 1,
     max_connections: int = 0,
+    max_ssh_connections: int = 0,
+    max_authenticating: int = 64,
+    max_startups: int = 4,
+    max_pending_startups: int = 64,
     idle_timeout: float = 0,
+    login_timeout: float = 30,
+    backlog: int = 128,
+    channel_window: int = 64 * 1024,
+    output_buffer_limit: int = 256 * 1024,
+    max_terminal_width: int = 240,
+    max_terminal_height: int = 80,
+    metrics_interval: float = 0,
+    metrics_callback: MetricsCallback | None = None,
     auth: Callable[[str, str], bool | Awaitable[bool]] | None = None,
     log_level: int | str | None = "INFO",
     log_color: bool = True,
@@ -152,9 +242,27 @@ def serve(
         host, port: Listen address.
         host_key_path: SSH host key file. If omitted,
              ``~/.ssh/textish_host_key`` is used and generated on first run.
+        workers: Server worker processes. Limits are applied per worker.
         max_connections: ``0`` means unlimited.
+        max_ssh_connections: Maximum simultaneous SSH transports. ``0`` means
+             unlimited. One transport may contain multiple sessions.
+        max_authenticating: Maximum transports authenticating concurrently.
+        max_startups: Maximum Textual apps starting concurrently.
+        max_pending_startups: Maximum admitted apps not yet ready, including
+             those waiting for a startup slot.
         idle_timeout: Close sessions after this many seconds without client
              input or resize activity. ``0`` disables the timeout.
+        login_timeout: Seconds allowed for SSH authentication. ``0`` disables.
+        backlog: Maximum queued TCP connections on the listening socket.
+        channel_window: Per-session SSH receive window in bytes.
+        output_buffer_limit: Buffered output bytes allowed before disconnecting
+             a slow client.
+        max_terminal_width, max_terminal_height: Bounds applied to client PTY
+             dimensions and later resize requests.
+        metrics_interval: Seconds between worker metrics snapshots. ``0``
+             disables reporting.
+        metrics_callback: Optional sync or async snapshot consumer. Without one,
+             enabled snapshots are logged as compact JSON.
         auth: Optional public-key auth callback (see :func:`authorized_keys`).
         log_level: If set (default ``"INFO"``) and logging is not already
              configured, install a stderr log handler at this level so the
@@ -181,8 +289,21 @@ def serve(
         host=host,
         port=port,
         host_key_path=host_key_path,
+        workers=workers,
         max_connections=max_connections,
+        max_ssh_connections=max_ssh_connections,
+        max_authenticating=max_authenticating,
+        max_startups=max_startups,
+        max_pending_startups=max_pending_startups,
         idle_timeout=idle_timeout,
+        login_timeout=login_timeout,
+        backlog=backlog,
+        channel_window=channel_window,
+        output_buffer_limit=output_buffer_limit,
+        max_terminal_width=max_terminal_width,
+        max_terminal_height=max_terminal_height,
+        metrics_interval=metrics_interval,
+        metrics_callback=metrics_callback,
         auth=auth,
         import_paths=_default_import_paths(),
     )
@@ -198,6 +319,13 @@ async def serve_async(config: AppConfig) -> None:
     Use this when embedding textish in an existing asyncio program; most callers
     want the simpler blocking :func:`serve` instead.
     """
+    if config.workers != 1:
+        raise ValueError("serve_async() requires workers=1; use serve() for workers")
+    await _serve_async(config)
+
+
+async def _serve_async(config: AppConfig, *, reuse_port: bool = False) -> None:
+    """Run one SSH listener, optionally sharing its port with sibling workers."""
     import asyncssh
 
     from .server import SessionManager, TextishSSHServer
@@ -211,7 +339,12 @@ async def serve_async(config: AppConfig) -> None:
             "Serving without authentication on non-loopback address %s", config.host
         )
 
-    session_manager = SessionManager()
+    session_manager = SessionManager(
+        max_startups=config.max_startups,
+        max_pending_startups=config.max_pending_startups,
+        max_ssh_connections=config.max_ssh_connections,
+        max_authenticating=config.max_authenticating,
+    )
 
     server = await asyncssh.create_server(
         lambda: TextishSSHServer(
@@ -220,15 +353,35 @@ async def serve_async(config: AppConfig) -> None:
             session_manager=session_manager,
             auth_function=config.auth,
             idle_timeout=config.idle_timeout,
+            channel_window=config.channel_window,
+            output_buffer_limit=config.output_buffer_limit,
+            max_terminal_width=config.max_terminal_width,
+            max_terminal_height=config.max_terminal_height,
         ),
         config.host,
         config.port,
         server_host_keys=[host_key],
+        backlog=config.backlog,
+        login_timeout=config.login_timeout,
+        reuse_port=reuse_port,
     )
+    metrics_task: asyncio.Task[None] | None = None
+    if config.metrics_interval > 0:
+        metrics_task = asyncio.create_task(
+            run_metrics_reporter(
+                session_manager.metrics_snapshot,
+                session_manager.metrics,
+                config.metrics_interval,
+                config.metrics_callback,
+            )
+        )
     async with server:
         try:
             await server.serve_forever()
         finally:
+            if metrics_task is not None:
+                metrics_task.cancel()
+                await asyncio.gather(metrics_task, return_exceptions=True)
             await session_manager.close_all()
 
 
@@ -272,4 +425,11 @@ def authorized_keys(path: str | Path) -> Callable[[str, str], Awaitable[bool]]:
     return _auth
 
 
-__all__ = ["serve", "serve_async", "AppConfig", "authorized_keys"]
+__all__ = [
+    "serve",
+    "serve_async",
+    "AppConfig",
+    "MetricsCallback",
+    "MetricsSnapshot",
+    "authorized_keys",
+]

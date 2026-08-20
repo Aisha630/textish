@@ -60,6 +60,8 @@ class InProcessAppSession:
         "_app",
         "_driver",
         "_early_input",
+        "_output_callback",
+        "_error_callback",
     )
 
     def __init__(
@@ -68,6 +70,8 @@ class InProcessAppSession:
         channel: asyncssh.SSHServerChannel[bytes],
         cols: int = 80,
         rows: int = 24,
+        output_callback: Callable[[int], None] | None = None,
+        error_callback: Callable[[], None] | None = None,
     ) -> None:
         self._app_source = app_source
         self._channel = channel
@@ -76,6 +80,8 @@ class InProcessAppSession:
         self._app: App[Any] | None = None
         self._driver: SSHDriver | None = None
         self._early_input = bytearray()
+        self._output_callback = output_callback
+        self._error_callback = error_callback
 
     async def run(self, ready_callback: Callable[[], None] | None = None) -> None:
         """Construct and run a fresh app instance until exit or cancellation."""
@@ -95,7 +101,11 @@ class InProcessAppSession:
             if not isinstance(app, App):
                 raise TypeError(f"{self._app_source!r} did not create a Textual App")
             self._app = app
-            app.driver_class = bind_ssh_driver(self._channel, self._driver_ready)
+            app.driver_class = bind_ssh_driver(
+                self._channel,
+                self._driver_ready,
+                self._output_callback,
+            )
             await app.run_async(
                 size=(self._cols, self._rows),
                 auto_pilot=app_ready,
@@ -103,6 +113,8 @@ class InProcessAppSession:
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
+            if self._error_callback is not None:
+                self._error_callback()
             log.error("App session failed: %s", exc, exc_info=True)
             try:
                 self._channel.write(
@@ -111,7 +123,6 @@ class InProcessAppSession:
             except OSError:
                 pass
         finally:
-            mark_ready()
             self._channel.close()
 
     def _driver_ready(self, driver: SSHDriver) -> None:

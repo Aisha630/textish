@@ -36,7 +36,12 @@ For each interactive SSH session:
 - A fresh app instance is constructed from the class, factory, or import reference.
 - A session-specific `SSHDriver` writes rendered bytes directly to its SSH channel and parses only that client's input.
 - All sessions share the server's modules and asyncio loop. There are no per-session threads, subprocesses, polling loops, or cross-interpreter queues.
-- Startup concurrency is bounded so a burst of new clients does not monopolize the event loop. Slow clients are disconnected when their SSH output buffer reaches the safety limit.
+- SSH transports, authentication, not-yet-ready apps, and concurrent app
+  startups have separate admission limits. Slow clients are disconnected when
+  their SSH output buffer reaches the safety limit.
+- Client-controlled terminal dimensions and SSH channel receive windows are
+  bounded so one session cannot request an arbitrarily expensive screen or
+  input buffer.
 
 This is the same idea as [wish](https://github.com/charmbracelet/wish) (Charmbracelet's SSH app framework for Go): the app is imported and run in-process rather than launched as a subprocess.
 
@@ -88,11 +93,14 @@ Pass `serve` your `App` subclass, any zero-argument factory, or a `"module:attr"
 textish my_package.my_module:MyApp
 textish my_package.my_module:MyApp --port 3000
 textish my_package.my_module:MyApp --host 127.0.0.1 --port 3000 --max-connections 10
+textish my_package.my_module:MyApp --workers 4 --max-ssh-connections 500 --max-startups 8
 ```
 
 Run `textish --help` for all options. The main controls are `--host`, `--port`,
-`--host-key`, `--max-connections`, `--idle-timeout`, and `--authorized-keys`.
-Use `--log-level DEBUG` (or `-v`) for detailed server logs.
+`--host-key`, `--workers`, `--max-connections`, `--max-ssh-connections`,
+`--max-authenticating`, `--max-startups`, `--max-pending-startups`,
+`--idle-timeout`, `--metrics-interval`, and `--authorized-keys`. Use
+`--log-level DEBUG` (or `-v`) for detailed server logs.
 
 ### Python API
 
@@ -103,6 +111,35 @@ from myapp import MyApp
 serve(MyApp, port=2222, max_connections=10)
 ```
 
+For a public production listener, set finite transport and session limits. The
+startup controls protect responsiveness during bursts:
+
+```python
+serve(
+    MyApp,
+    host="0.0.0.0",
+    workers=4,
+    max_ssh_connections=500,
+    max_connections=500,
+    max_authenticating=32,
+    max_startups=8,
+    max_pending_startups=64,
+    idle_timeout=1800,
+    metrics_interval=10,
+    auth=my_auth,
+)
+```
+
+`max_connections` counts SSH session channels; `max_ssh_connections` counts
+SSH transports. One transport may open multiple channels. Pending startups
+include apps currently starting and apps waiting for a startup slot. When the
+pending limit is full, new app sessions receive a short busy message and close.
+All resource limits are per worker, so the example permits approximately 2,000
+SSH transports across four workers. Workers share the listening port through
+the operating system and each owns an independent event loop and Python heap.
+Call multi-worker `serve()` from the main process before starting application
+threads.
+
 `serve` blocks and runs its own event loop. If you are embedding textish in a program that already has a running loop, build an `AppConfig` and use the async entry point instead:
 
 ```python
@@ -112,6 +149,39 @@ await serve_async(AppConfig(app_ref="myapp:MyApp", port=2222))
 ```
 
 The async entry point generates the host key when needed, just like `serve`.
+`serve_async()` requires `workers=1`; programs embedding an existing event loop
+should run multiple application processes with their process supervisor instead.
+
+### Runtime metrics
+
+Set `metrics_interval` to emit one compact JSON snapshot per worker at the
+requested interval. The process ID in each snapshot identifies its worker:
+
+```python
+serve(MyApp, workers=4, metrics_interval=10)
+```
+
+Snapshots include current SSH, authentication, session, startup, and app-task
+counts; admission rejections; idle and slow-reader disconnects; app failures;
+input/output byte totals; startup and input-to-render latency; and event-loop
+lag. To send these values to an existing telemetry system, supply a synchronous
+or asynchronous callback instead of using the default JSON logger:
+
+```python
+from textish import MetricsSnapshot, serve
+
+async def publish_metrics(snapshot: MetricsSnapshot) -> None:
+    await telemetry.write(snapshot)
+
+serve(
+    MyApp,
+    metrics_interval=10,
+    metrics_callback=publish_metrics,
+)
+```
+
+Callbacks run on the worker event loop, so they should return promptly and use
+non-blocking I/O. Counters and latency samples are per worker.
 
 ### Host keys
 
@@ -165,6 +235,60 @@ All apps share one event loop and GIL. Keep event handlers short and non-blockin
 use async I/O, and move blocking work to a Textual worker or
 `asyncio.to_thread()`. CPU-heavy work should use a process pool or external
 service. A blocking handler can delay every connected user.
+
+### Capacity testing
+
+The repository includes a self-contained load harness which runs the server in
+an isolated process. It performs real SSH handshakes, opens PTYs, waits for a
+Textual app to render, holds every session open, and measures a simultaneous
+input-to-render burst:
+
+```
+uv run --frozen python benchmarks/session_load.py
+uv run --frozen python benchmarks/session_load.py --workers 4 --sessions 100 500 1000
+uv run --frozen python benchmarks/session_load.py \
+  --workers 2 --sessions 100 --max-input-p95-ms 250
+uv run --frozen python benchmarks/session_load.py \
+  --app-ref myapp:MyApp --ready-text "READY" \
+  --input-text x --response-text "UPDATED" --active-ratio 0.2 \
+  --churn-ratio 0.05 --resize 1000x1000 --soak-seconds 300 \
+  --json-output benchmark.json
+```
+
+It reports server RSS, startup p50/p95, interaction p50/p95, and replacement
+startup p95 at each target. `--active-ratio` models a mix of active and idle
+sessions, `--churn-ratio` replaces a portion of the population each round,
+`--resize` exercises terminal-size clamping, and `--soak-seconds` repeats the
+interaction scenario. `--json-output` writes a machine-readable regression
+artifact. A real app scenario may omit `--input-text` and `--response-text` to
+measure startup and holding cost only.
+
+Use the results to set per-worker limits with memory and latency headroom. The
+default benchmark app is intentionally tiny, so applications with larger widget
+trees should be profiled under their expected data volume and terminal sizes.
+
+A small two-worker benchmark is also part of the normal pytest suite, so every
+local and CI test run covers real handshakes, PTYs, app import by reference,
+startup, mixed active/idle input, rendering, churn, an oversized resize, JSON
+reporting, and worker shutdown. Its latency budgets are intentionally loose to
+catch hangs and major regressions without making shared CI hardware flaky; use
+the full harness with deployment-specific budgets for capacity work.
+
+### Admission controls
+
+Defaults allow unlimited live transports and sessions for local development,
+but bound the expensive transition into a ready app:
+
+- 64 transports authenticating concurrently;
+- 4 apps starting concurrently and 64 not-yet-ready apps;
+- a 64 KiB SSH receive window and 256 KiB slow-reader output limit; and
+- terminal dimensions clamped to 240 columns by 80 rows.
+
+These values are configurable through `serve()`, `AppConfig`, and the CLI.
+Production deployments should set finite `max_ssh_connections` and
+`max_connections`, then increase `workers` when one event loop no longer meets
+the interaction-latency target. Multiple hosts can sit behind an L4 load
+balancer for capacity beyond one machine.
 
 ### SSH compression
 

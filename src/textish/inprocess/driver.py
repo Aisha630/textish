@@ -40,6 +40,7 @@ class SSHDriver(Driver):
         *,
         channel: ByteChannel,
         on_ready: Callable[[SSHDriver], None],
+        on_output: Callable[[int], None] | None = None,
         debug: bool = False,
         mouse: bool = True,
         size: tuple[int, int] | None = None,
@@ -47,13 +48,17 @@ class SSHDriver(Driver):
         super().__init__(app, debug=debug, mouse=mouse, size=size)
         self._channel = channel
         self._on_ready = on_ready
+        self._on_output = on_output
         self._parser = XTermParser(debug=debug)
         self._decoder = getincrementaldecoder("utf-8")()
         self._alive = False
 
     def write(self, data: str) -> None:
+        encoded = data.encode("utf-8", errors="replace")
         try:
-            self._channel.write(data.encode("utf-8", errors="replace"))
+            self._channel.write(encoded)
+            if self._on_output is not None:
+                self._on_output(len(encoded))
         except OSError:
             pass
 
@@ -97,8 +102,14 @@ class SSHDriver(Driver):
 def bind_ssh_driver(
     channel: ByteChannel,
     on_ready: Callable[[SSHDriver], None],
+    on_output: Callable[[int], None] | None = None,
 ) -> type[SSHDriver]:
     """Bind a channel to the driver constructor expected by Textual."""
-    factory = partial(SSHDriver, channel=channel, on_ready=on_ready)
+    factory = partial(
+        SSHDriver,
+        channel=channel,
+        on_ready=on_ready,
+        on_output=on_output,
+    )
     # Textual annotates driver_class as a class, but only calls it as a factory.
     return cast("type[SSHDriver]", factory)

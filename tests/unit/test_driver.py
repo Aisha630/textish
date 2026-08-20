@@ -24,6 +24,18 @@ async def test_write_encodes_text_as_utf8():
 
 
 @pytest.mark.asyncio
+async def test_write_reports_encoded_output_bytes():
+    channel = MagicMock()
+    on_output = MagicMock()
+    driver_class = bind_ssh_driver(channel, MagicMock(), on_output)
+    driver = driver_class(MagicMock(), size=(80, 24))
+
+    driver.write("café")
+
+    on_output.assert_called_once_with(len("café".encode()))
+
+
+@pytest.mark.asyncio
 async def test_start_application_mode_initializes_terminal_and_reports_ready():
     channel, on_ready, driver = _make_driver()
     driver.send_message = MagicMock()

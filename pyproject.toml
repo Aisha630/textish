@@ -98,7 +98,8 @@ dist_glob_patterns = ["dist/*"]
 upload_to_vcs_release = true
 
 [tool.mypy]
-files = ["src/textish"]
+files = ["src/textish", "benchmarks"]
+mypy_path = "src"
 python_version = "3.12"
 strict = true
 

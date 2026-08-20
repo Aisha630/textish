@@ -68,3 +68,20 @@ async def test_system_exit_in_one_app_does_not_escape_session():
 
     channel.close.assert_called_once()
     channel.write.assert_any_call(b"\r\ntextish app failed; check the server logs.\r\n")
+
+
+@pytest.mark.asyncio
+async def test_failed_app_does_not_report_ready():
+    channel = MagicMock()
+    ready_callback = MagicMock()
+    error_callback = MagicMock()
+    session = InProcessAppSession(
+        lambda: object(),
+        channel,
+        error_callback=error_callback,
+    )
+
+    await session.run(ready_callback)
+
+    ready_callback.assert_not_called()
+    error_callback.assert_called_once()

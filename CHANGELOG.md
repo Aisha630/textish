@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v0.5.1 (2026-08-20)
+
+### Bug Fixes
+
+- Update badge links in README and replace demo GIF
+  ([`a4e9fbd`](https://github.com/Aisha630/textish/commit/a4e9fbd651e5a2c397ae83d762d43e9465cbcd1c))
+
+### Chores
+
+- Remove internal benchmarks
+  ([`bc5bc7c`](https://github.com/Aisha630/textish/commit/bc5bc7cbaa93bb9e8d23600d2a7b43191de2dae9))
+
+
 ## v0.5.0 (2026-07-17)
 
 ### Features
